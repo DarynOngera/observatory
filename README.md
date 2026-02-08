@@ -79,8 +79,8 @@ Phased Implementation:
 ### Setup
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/multimedia-systems-observatory.git
-   cd multimedia-systems-observatory
+   git clone https://github.com/DarynOngera/observatory.git
+   cd observatory
    ```
 2. Install dependencies:
    ```
