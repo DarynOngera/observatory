@@ -75,7 +75,7 @@ defmodule Observatory.FFprobeParser do
 
   defp parse_format(data) do
     %Format{
-      container_type: data["format_data"],
+      container_type: data["format_name"],
       duration_sec: parse_float(data["duration"]),
       size_bytes: parse_int(data["size"]),
       bitrate_bps: parse_int(data["bit_rate"]),
