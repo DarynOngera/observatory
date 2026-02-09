@@ -1,14 +1,13 @@
 defmodule Observatory.Membrane.TranscodePipeline do
   @moduledoc """
-  Membrane pipeline for transcoding operations with progress tracking.
+  Membrane pipeline for media transcoding with video transformation support.
   """
-
   use Membrane.Pipeline
-  import Membrane.ChildrenSpec
 
   require Membrane.Logger
 
-  alias Membrane.{File, MP4, H264, AAC, RawVideo}
+  alias Membrane.{File, MP4, H264}
+  alias Membrane.FFmpeg.SWScale
 
   @impl true
   def handle_init(_ctx, opts) do
@@ -16,188 +15,171 @@ defmodule Observatory.Membrane.TranscodePipeline do
     output_file = Keyword.fetch!(opts, :output_file)
     config = Keyword.get(opts, :config, %{})
 
-    spec = build_transcode_spec(input_file, output_file, config)
+    # Build initial spec with input, demuxer, muxer, and output
+    spec = [
+      child(:input_file, %File.Source{location: input_file})
+      |> child(:demuxer, MP4.Demuxer.ISOM),
+      child(:muxer, MP4.Muxer.ISOM)
+      |> child(:output_file, %File.Sink{location: output_file})
+    ]
+
+    # Build video config from flat config structure
+    video_config =
+      %{
+        codec: Map.get(config, :codec),
+        width: Map.get(config, :resolution) |> elem(0),
+        height: Map.get(config, :resolution) |> elem(1),
+        preset: Map.get(config, :preset),
+        crf: Map.get(config, :crf),
+        gop_size: Map.get(config, :gop_size)
+      }
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
 
     state = %{
       input_file: input_file,
       output_file: output_file,
       config: config,
+      video_config: video_config,
+      stream_count: 0,
+      completed_streams: 0,
       start_time: System.monotonic_time(:millisecond),
-      frame_count: 0,
-      total_frames: nil
+      frame_count: 0
     }
 
     {[spec: spec], state}
   end
 
   @impl true
-  def handle_child_notification({:end_of_stream, _pad}, _element, _ctx, state) do
-    Membrane.Logger.info("Stream ended")
-    send_completion_event(state)
-    {[], state}
+  def handle_child_notification(
+        {:new_stream, track_id, %Membrane.H264{} = _stream_format},
+        :demuxer,
+        _ctx,
+        state
+      ) do
+    Membrane.Logger.info("New H264 video stream detected: track_id=#{track_id}")
+
+    video_config = state.video_config
+
+    spec =
+      if video_config[:codec] do
+        # Transcode path
+        build_video_transcode_spec(track_id, video_config)
+      else
+        # Passthrough path
+        build_video_passthrough_spec(track_id)
+      end
+
+    new_state = %{state | stream_count: state.stream_count + 1}
+    {[spec: spec], new_state}
   end
 
   @impl true
-  def handle_child_notification({:frame_encoded, _metadata}, _element, _ctx, state) do
-    state = %{state | frame_count: state.frame_count + 1}
-    send_progress_event(state)
-    {[], state}
+  def handle_child_notification(
+        {:new_stream, track_id, %Membrane.AAC{} = _stream_format},
+        :demuxer,
+        _ctx,
+        state
+      ) do
+    Membrane.Logger.info("New AAC audio stream detected: track_id=#{track_id}")
+
+    # For now, passthrough audio
+    spec =
+      get_child(:demuxer)
+      |> via_out(Pad.ref(:output, track_id))
+      |> via_in(Pad.ref(:input, track_id), options: [track_id: track_id])
+      |> get_child(:muxer)
+
+    new_state = %{state | stream_count: state.stream_count + 1}
+    {[spec: spec], new_state}
   end
 
   @impl true
-  def handle_child_notification(notification, element, _ctx, state) do
-    Membrane.Logger.debug("Notification from #{inspect(element)}: #{inspect(notification)}")
-    {[], state}
+  def handle_child_notification({:new_stream, track_id, stream_format}, :demuxer, _ctx, state) do
+    Membrane.Logger.warning(
+      "Unknown stream format: track_id=#{track_id}, format=#{inspect(stream_format)}"
+    )
+
+    # Try to passthrough unknown streams
+    spec =
+      get_child(:demuxer)
+      |> via_out(Pad.ref(:output, track_id))
+      |> via_in(Pad.ref(:input, track_id), options: [track_id: track_id])
+      |> get_child(:muxer)
+
+    new_state = %{state | stream_count: state.stream_count + 1}
+    {[spec: spec], new_state}
   end
 
-  # Build transcode pipeline specification
-  defp build_transcode_spec(input_file, output_file, config) do
-    video_config = Map.get(config, :video, %{})
-    audio_config = Map.get(config, :audio, %{})
+  @impl true
+  def handle_element_end_of_stream(:output_file, _pad, _ctx, state) do
+    Membrane.Logger.info("Output file completed")
+    {[terminate: :normal], state}
+  end
 
-    children = [
-      input_file: %File.Source{location: input_file},
-      demuxer: MP4.Demuxer.ISOM,
-      muxer: MP4.Muxer.ISOM,
-      output_file: %File.Sink{location: output_file}
-    ]
+  @impl true
+  def handle_element_end_of_stream(element, _pad, _ctx, state) do
+    completed = state.completed_streams + 1
 
-    links = [
-      link(:input_file) |> to(:demuxer)
-    ]
+    Membrane.Logger.info(
+      "Element completed: #{inspect(element)} (#{completed}/#{state.stream_count})"
+    )
 
-    # Add video pipeline if needed
-    {children, links} = 
-      if video_config[:enabled] != false do
-        add_video_pipeline(children, links, video_config)
+    {[], %{state | completed_streams: completed}}
+  end
+
+  # Private functions
+
+  defp build_video_transcode_spec(track_id, config) do
+    has_resolution = Map.get(config, :width) != nil && Map.get(config, :height) != nil
+
+    encoder_opts = %H264.FFmpeg.Encoder{
+      preset: Map.get(config, :preset, :medium),
+      crf: Map.get(config, :crf, 23)
+    }
+
+    # Build the processing chain
+    chain =
+      get_child(:demuxer)
+      |> via_out(Pad.ref(:output, track_id))
+      |> child({:video_parser, track_id}, H264.Parser)
+      |> child({:video_decoder, track_id}, H264.FFmpeg.Decoder)
+
+    # Add scaler only if resolution is specified
+    chain =
+      if has_resolution do
+        scaler_opts = %{
+          output_width: Map.get(config, :width),
+          output_height: Map.get(config, :height)
+        }
+
+        chain
+        |> child({:video_scaler, track_id}, struct!(SWScale.Scaler, scaler_opts))
+        |> child({:video_encoder, track_id}, encoder_opts)
       else
-        add_video_passthrough(children, links)
+        chain
+        |> child({:video_encoder, track_id}, encoder_opts)
       end
 
-    # Add audio pipeline if needed
-    {children, links} = 
-      if audio_config[:enabled] != false do
-        add_audio_pipeline(children, links, audio_config)
-      else
-        {children, links}
-      end
+    # Add output parser and connect to muxer
+    chain =
+      chain
+      |> child({:video_parser_out, track_id}, H264.Parser)
 
-    # Connect muxer to output
-    links = links ++ [link(:muxer) |> to(:output_file)]
-
+    # Return the full spec
     [
-      children: children,
-      links: links
+      chain,
+      get_child({:video_parser_out, track_id})
+      |> via_in(Pad.ref(:input, track_id), options: [track_id: track_id])
+      |> get_child(:muxer)
     ]
   end
 
-  # Add video encoding pipeline
-  defp add_video_pipeline(children, links, config) do
-    codec = Map.get(config, :codec, :h264)
-    
-    video_children = case codec do
-      :h264 ->
-        [
-          video_parser: H264.Parser,
-          video_decoder: H264.FFmpeg.Decoder,
-          video_scaler: %RawVideo.FFmpeg.Scaler{
-            width: Map.get(config, :width),
-            height: Map.get(config, :height)
-          },
-          video_encoder: %H264.FFmpeg.Encoder{
-            preset: Map.get(config, :preset, :medium),
-            crf: Map.get(config, :crf, 23),
-            max_b_frames: Map.get(config, :max_b_frames, 0)
-          },
-          video_parser_out: H264.Parser
-        ]
-      _ ->
-        []
-    end
-
-    video_links = [
-      link(:demuxer)
-      |> via_out(Pad.ref(:output, {:video, 0}))
-      |> to(:video_parser)
-      |> to(:video_decoder)
-      |> to(:video_scaler)
-      |> to(:video_encoder)
-      |> to(:video_parser_out)
-      |> via_in(Pad.ref(:input, :video))
-      |> to(:muxer)
-    ]
-
-    {children ++ video_children, links ++ video_links}
+  defp build_video_passthrough_spec(track_id) do
+    # Direct passthrough from demuxer to muxer
+    get_child(:demuxer)
+    |> via_out(Pad.ref(:output, track_id))
+    |> via_in(Pad.ref(:input, track_id), options: [track_id: track_id])
+    |> get_child(:muxer)
   end
-
-  # Add video passthrough (no transcoding)
-  defp add_video_passthrough(children, links) do
-    video_links = [
-      link(:demuxer)
-      |> via_out(Pad.ref(:output, {:video, 0}))
-      |> via_in(Pad.ref(:input, :video))
-      |> to(:muxer)
-    ]
-
-    {children, links ++ video_links}
-  end
-
-  # Add audio encoding pipeline
-  defp add_audio_pipeline(children, links, config) do
-    codec = Map.get(config, :codec, :aac)
-    
-    audio_children = case codec do
-      :aac ->
-        [
-          audio_decoder: AAC.Decoder,
-          audio_encoder: %AAC.Encoder{
-            bitrate: Map.get(config, :bitrate, 128_000)
-          }
-        ]
-      _ ->
-        []
-    end
-
-    audio_links = [
-      link(:demuxer)
-      |> via_out(Pad.ref(:output, {:audio, 0}))
-      |> via_in(Pad.ref(:input, :audio))
-      |> to(:muxer)
-    ]
-
-    {children ++ audio_children, links ++ audio_links}
-  end
-
-  # Event helpers
-  defp send_progress_event(state) do
-    elapsed_ms = System.monotonic_time(:millisecond) - state.start_time
-    
-    event = %{
-      type: :progress,
-      frames_encoded: state.frame_count,
-      elapsed_ms: elapsed_ms,
-      fps: calculate_fps(state.frame_count, elapsed_ms)
-    }
-
-    send(self(), {:transcode_event, event})
-  end
-
-  defp send_completion_event(state) do
-    elapsed_ms = System.monotonic_time(:millisecond) - state.start_time
-    
-    event = %{
-      type: :complete,
-      total_frames: state.frame_count,
-      elapsed_ms: elapsed_ms,
-      output_file: state.output_file
-    }
-
-    send(self(), {:transcode_event, event})
-  end
-
-  defp calculate_fps(frame_count, elapsed_ms) when elapsed_ms > 0 do
-    frame_count / (elapsed_ms / 1000)
-  end
-
-  defp calculate_fps(_, _), do: 0.0
 end

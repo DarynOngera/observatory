@@ -1,7 +1,7 @@
 defmodule Observatory.Membrane.PipelineSupervisor do
   @moduledoc """
   Supervises Membrane pipelines for transformations.
-  
+
   Manages pipeline lifecycle and event collection.
   """
 
@@ -22,7 +22,7 @@ defmodule Observatory.Membrane.PipelineSupervisor do
 
   @doc """
   Starts a transformation pipeline.
-  
+
   Returns a reference that can be used to track progress.
   """
   @spec start_pipeline(String.t(), String.t(), ProcessSchema.TransformConfig.t()) ::
@@ -52,7 +52,8 @@ defmodule Observatory.Membrane.PipelineSupervisor do
   @impl true
   def init(_opts) do
     state = %{
-      pipelines: %{}  # ref => %{pid, process_schema}
+      # ref => %{pid, process_schema}
+      pipelines: %{}
     }
 
     {:ok, state}
@@ -61,17 +62,18 @@ defmodule Observatory.Membrane.PipelineSupervisor do
   @impl true
   def handle_call({:start_pipeline, input_file, output_file, config}, _from, state) do
     ref = make_ref()
-    
+
     # Create process schema
     process = ProcessSchema.new(input_file, output_file, config)
     process = ProcessSchema.mark_running(process)
 
     # Determine pipeline type based on config
-    pipeline_module = if needs_transcoding?(config) do
-      TranscodePipeline
-    else
-      TransformPipeline
-    end
+    pipeline_module =
+      if needs_transcoding?(config) do
+        TranscodePipeline
+      else
+        TransformPipeline
+      end
 
     # Start pipeline
     pipeline_opts = [
@@ -82,7 +84,7 @@ defmodule Observatory.Membrane.PipelineSupervisor do
     ]
 
     case Membrane.Pipeline.start_link(pipeline_module, pipeline_opts) do
-      {:ok, pid} ->
+      {:ok, pid, _supervisor_pid} ->
         # Monitor the pipeline
         Process.monitor(pid)
 
@@ -130,9 +132,10 @@ defmodule Observatory.Membrane.PipelineSupervisor do
   def handle_info({:membrane_event, :progress, event}, state) do
     # Update all pipelines with this event
     # (In production, you'd track which pipeline sent this)
-    new_state = update_all_pipelines(state, fn process ->
-      ProcessSchema.add_event(process, event)
-    end)
+    new_state =
+      update_all_pipelines(state, fn process ->
+        ProcessSchema.add_event(process, event)
+      end)
 
     {:noreply, new_state}
   end
@@ -140,10 +143,11 @@ defmodule Observatory.Membrane.PipelineSupervisor do
   @impl true
   def handle_info({:membrane_event, :completed, event}, state) do
     # Mark pipeline as completed
-    new_state = update_all_pipelines(state, fn process ->
-      stats = extract_stats_from_event(event)
-      ProcessSchema.mark_completed(process, stats)
-    end)
+    new_state =
+      update_all_pipelines(state, fn process ->
+        stats = extract_stats_from_event(event)
+        ProcessSchema.mark_completed(process, stats)
+      end)
 
     {:noreply, new_state}
   end
@@ -154,10 +158,11 @@ defmodule Observatory.Membrane.PipelineSupervisor do
     Logger.info("Pipeline #{inspect(pid)} terminated: #{inspect(reason)}")
 
     # Find and remove the pipeline
-    new_state = update_in(state.pipelines, fn pipelines ->
-      Enum.reject(pipelines, fn {_ref, %{pid: p}} -> p == pid end)
-      |> Map.new()
-    end)
+    new_state =
+      update_in(state.pipelines, fn pipelines ->
+        Enum.reject(pipelines, fn {_ref, %{pid: p}} -> p == pid end)
+        |> Map.new()
+      end)
 
     {:noreply, new_state}
   end
@@ -166,13 +171,13 @@ defmodule Observatory.Membrane.PipelineSupervisor do
 
   defp needs_transcoding?(config) do
     config.codec != nil ||
-    config.resolution != nil ||
-    config.crf != nil ||
-    config.gop_size != nil
+      config.resolution != nil ||
+      config.crf != nil ||
+      config.gop_size != nil
   end
 
   defp update_all_pipelines(state, fun) do
-    new_pipelines = 
+    new_pipelines =
       state.pipelines
       |> Enum.map(fn {ref, pipeline_state} ->
         {ref, %{pipeline_state | process: fun.(pipeline_state.process)}}
@@ -189,7 +194,8 @@ defmodule Observatory.Membrane.PipelineSupervisor do
       duration_sec: data[:duration_sec] || 0.0,
       frames_processed: data[:frames_processed] || 0,
       fps: data[:avg_fps] || 0.0,
-      bitrate_kbps: 0.0,  # Will be calculated from output file
+      # Will be calculated from output file
+      bitrate_kbps: 0.0,
       speed: 0.0,
       size_bytes: 0,
       quality_score: nil
