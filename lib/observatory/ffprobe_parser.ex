@@ -7,7 +7,7 @@ defmodule Observatory.FFprobeParser do
   
       ffprobe -v error -show_format -show_streams -print_format json input.mp4
   
-  ## Responsibilities
+  Responsibilities
   
   - Parse ffprobe JSON structure
   - Normalize field types (strings to numbers, tuples, etc.)
@@ -18,9 +18,9 @@ defmodule Observatory.FFprobeParser do
   alias Observatory.MediaSchema.{Format, Stream}
 
   @doc """
-   Parses ffprobe JSON string into MediaSchema.
+  Parses ffprobe JSON string into MediaSchema.
   
-  ## Expected JSON Structure
+  Expected JSON Structure
   
       {
         "format": {
