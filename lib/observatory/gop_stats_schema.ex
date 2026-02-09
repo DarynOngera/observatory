@@ -35,6 +35,18 @@ defmodule Observatory.GOPStatsSchema do
     
     A GOP is a sequence of frames between two I-frames (keyframes).
     The first frame is always an I-frame.
+
+      
+    The compression ratio represents how much the video is compressed:
+  
+      compression_ratio = uncompressed_size / compressed_size
+  
+    For YUV 4:2:0 video (most common):
+      - Uncompressed size per frame = width * height * 1.5 bytes
+      - Y plane: width * height bytes (full resolution)
+      - U plane: (width/2) * (height/2) bytes (quarter resolution)
+      - V plane: (width/2) * (height/2) bytes (quarter resolution)
+      - Total: width * height * (1 + 0.25 + 0.25) = width * height * 1.5
     """
 
     @type t :: %__MODULE__{

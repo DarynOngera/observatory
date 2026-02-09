@@ -15,6 +15,7 @@ defmodule Observatory.Application do
       # Start a worker by calling: Observatory.Worker.start_link(arg)
       # {Observatory.Worker, arg},
       # Start to serve requests, typically the last entry
+      Observatory.Membrane.PipeLineSupervisor,
       ObservatoryWeb.Endpoint
     ]
 
