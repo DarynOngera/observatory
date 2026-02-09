@@ -45,6 +45,7 @@ defmodule Observatory.Introspector do
   @spec analyze(Path.t(), keyword()) :: {:ok, MediaSchema.t()} | {:error, term()}
   def analyze(file_path, opts \\ []) do
     with :ok <- validate_file_exists(file_path),
+      true <- ffprobe_available?(["-version"]),
       {:ok, json_output} <- run_ffprobe(file_path, opts),
       {:ok, schema} <- FFprobeParser.parse(json_output) do
       {:ok, %{schema | file_path: file_path}}
@@ -59,7 +60,7 @@ defmodule Observatory.Introspector do
   def ffprobe_available?(opts \\ []) do
     ffprobe_cmd = Keyword.get(opts, :ffprobe_path, @ffprobe_cmd)
     
-    case System.cmd(ffprobe_cmd, ["-version"], stderr_to_stdout: true) do
+    case System.cmd(ffprobe_cmd, opts, stderr_to_stdout: true) do
       {output, 0} ->
         String.contains?(output, "ffprobe version")
       _ ->
@@ -85,6 +86,7 @@ defmodule Observatory.Introspector do
           |> String.split("\n")
           |> hd()
         {:ok, version}
+      IO.puts(version)
       {error, _} -> {:error, {:ffprobe_failed, error}}
     end
   rescue
@@ -95,7 +97,7 @@ defmodule Observatory.Introspector do
     if File.exists?(file_path) do
       :ok
     else
-      {:ok, :file_not_found}
+      {:error, :file_not_found}
     end
   end
 
