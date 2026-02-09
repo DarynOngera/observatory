@@ -91,6 +91,13 @@ defmodule Observatory.GOPStatsSchema do
         end
       end)
     end
+
+    @spec compression_ratio_str(t()) :: String.t()
+  def compression_ratio_str(%__MODULE__{compression_ratio: ratio}) when is_float(ratio) do
+    "#{Float.round(ratio, 1)}:1"
+  end
+  
+  def compression_ratio_str(_), do: "N/A"
   end
 
   defmodule AggregateStats do
