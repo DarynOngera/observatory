@@ -2,8 +2,6 @@ defmodule Observatory.IntrospectorTest do
   use ExUnit.Case, async: true
 
   alias Observatory.Introspector 
-  alias Observatory.MediaSchema
-  alias Observatory.MediaSchema.{Format, Stream}
 
   describe "tests for analyze/1" do
     test "test analyze/1 with valid file path" do

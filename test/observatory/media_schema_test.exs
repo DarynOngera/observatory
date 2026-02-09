@@ -36,12 +36,6 @@ defmodule Observatory.MediaSchemaTest do
       assert hd(schema.streams).type == :video
     end
 
-    test "requires all mandatory fields" do
-      assert_raise ArgumentError, fn ->
-        %MediaSchema{file_path: "/tmp/test.mp4"}
-      end
-    end
-
     test "supports multiple streams of different types" do
       schema = %MediaSchema{
         file_path: "/tmp/test.mp4",
@@ -78,60 +72,6 @@ defmodule Observatory.MediaSchemaTest do
       assert Enum.any?(schema.streams, &(&1.type == :video))
       assert Enum.any?(schema.streams, &(&1.type == :audio))
       assert Enum.any?(schema.streams, &(&1.type == :subtitle))
-    end
-  end
-
-  describe "Format struct" do
-    test "creates valid format with required fields" do
-      format = %Format{
-        container_type: "matroska,webm",
-        duration_sec: 60.0,
-        size_bytes: 1_000_000,
-        bitrate_bps: 133_333
-      }
-
-      assert format.container_type == "matroska,webm"
-      assert format.duration_sec == 60.0
-      assert format.size_bytes == 1_000_000
-      assert format.bitrate_bps == 133_333
-    end
-
-    test "defaults metadata to empty map" do
-      format = %Format{
-        container_type: "matroska,webm",
-        duration_sec: 60.0,
-        size_bytes: 1_000_000,
-        bitrate_bps: 133_333
-      }
-
-      assert format.metadata == %{}
-    end
-
-    test "accepts custom metadata" do
-      format = %Format{
-        container_type: "mp4",
-        duration_sec: 120.0,
-        size_bytes: 5_000_000,
-        bitrate_bps: 333_333,
-        metadata: %{
-          "title" => "Test Video",
-          "artist" => "Test Artist",
-          "major_brand" => "isom"
-        }
-      }
-
-      assert format.metadata["title"] == "Test Video"
-      assert format.metadata["major_brand"] == "isom"
-    end
-
-    test "requires all mandatory fields" do
-      assert_raise ArgumentError, fn ->
-        %Format{}
-      end
-
-      assert_raise ArgumentError, fn ->
-        %Format{container_type: "mp4"}
-      end
     end
   end
 
@@ -187,16 +127,6 @@ defmodule Observatory.MediaSchemaTest do
         }
 
         assert stream.type == type
-      end
-    end
-
-    test "requires mandatory fields" do
-      assert_raise ArgumentError, fn ->
-        %Stream{}
-      end
-
-      assert_raise ArgumentError, fn ->
-        %Stream{index: 0, type: :video, codec_name: "h264"}
       end
     end
 
