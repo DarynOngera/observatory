@@ -21,11 +21,11 @@ defmodule Observatory.Introspector do
   @doc """
   Analyzes a media file and returns MediaSchema.
   
-  ## Options
+  Options
   
   - `:ffprobe_path` - Custom path to ffprobe binary (default: "ffprobe")
   
-  ## Returns
+  Returns
   
   - `{:ok, %MediaSchema{}}` - Successfully analyzed
   - `{:error, :file_not_found}` - File does not exist
@@ -33,7 +33,7 @@ defmodule Observatory.Introspector do
   - `{:error, {:ffprobe_not_found, error}}` - ffprobe binary not found
   - `{:error, atom()}` - Parser errors (invalid_json, etc.)
   
-  ## Examples
+  Examples
   
       iex> Introspector.analyze("test/fixtures/sample.mp4")
       {:ok, %MediaSchema{...}}
@@ -51,6 +51,10 @@ defmodule Observatory.Introspector do
     end
   end
 
+  @doc """
+  Checks if ffprobe is available.
+"""
+
   @spec ffprobe_available?(keyword()) :: boolean()
   def ffprobe_available?(opts \\ []) do
     ffprobe_cmd = Keyword.get(opts, :ffprobe_path, @ffprobe_cmd)
@@ -65,6 +69,10 @@ defmodule Observatory.Introspector do
     _ ->
       false 
   end
+
+  @doc """
+  Checks current ffprobe version
+"""
 
   @spec ffprobe_version(keyword()) :: {:ok, String.t()} | {:error, term()}
   def ffprobe_version(opts \\ []) do
