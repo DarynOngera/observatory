@@ -108,3 +108,9 @@ Phased Implementation:
 Example Workflow:
 - Upload a video → Inspect container and streams → Adjust encode preset → Observe process events → Play both versions with GOP markers.
 
+## Resources 
+[ffprobe](https://www.ffmpeg.org/ffprobe-all.html)
+[ffmpeg](https://www.ffmpeg.org/ffmpeg-all.html)
+[ffplay](https://www.ffmpeg.org/ffplay-all.html)
+
+[Membrane 101](https://membrane.stream/learn/get_started_with_membrane)
