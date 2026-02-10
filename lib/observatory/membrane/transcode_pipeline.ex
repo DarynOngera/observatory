@@ -8,14 +8,20 @@ defmodule Observatory.Membrane.TranscodePipeline do
 
   alias Membrane.{File, MP4, H264}
   alias Membrane.FFmpeg.SWScale
+  alias Observatory.ProcessSchema
 
   @impl true
   def handle_init(_ctx, opts) do
     input_file = Keyword.fetch!(opts, :input_file)
     output_file = Keyword.fetch!(opts, :output_file)
-    config = Keyword.get(opts, :config, %{})
+    config = Keyword.fetch!(opts, :config)
+    callback_pid = Keyword.get(opts, :callback_pid)
 
-    # Build initial spec with input, demuxer, muxer, and output
+    Membrane.Logger.info("Transcode pipeline starting: #{input_file} -> #{output_file}")
+    Membrane.Logger.info("Config: #{inspect(config)}")
+
+    #initial spec with input, demuxer, muxer, and output
+
     spec = [
       child(:input_file, %File.Source{location: input_file})
       |> child(:demuxer, MP4.Demuxer.ISOM),
@@ -23,24 +29,11 @@ defmodule Observatory.Membrane.TranscodePipeline do
       |> child(:output_file, %File.Sink{location: output_file})
     ]
 
-    # Build video config from flat config structure
-    video_config =
-      %{
-        codec: Map.get(config, :codec),
-        width: Map.get(config, :resolution) |> elem(0),
-        height: Map.get(config, :resolution) |> elem(1),
-        preset: Map.get(config, :preset),
-        crf: Map.get(config, :crf),
-        gop_size: Map.get(config, :gop_size)
-      }
-      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-      |> Map.new()
-
     state = %{
       input_file: input_file,
       output_file: output_file,
       config: config,
-      video_config: video_config,
+      callback_pid: callback_pid,
       stream_count: 0,
       completed_streams: 0,
       start_time: System.monotonic_time(:millisecond),
@@ -51,26 +44,12 @@ defmodule Observatory.Membrane.TranscodePipeline do
   end
 
   @impl true
-  def handle_child_notification(
-        {:new_stream, track_id, %Membrane.H264{} = _stream_format},
-        :demuxer,
-        _ctx,
-        state
-      ) do
-    Membrane.Logger.info("New H264 video stream detected: track_id=#{track_id}")
+  def handle_child_notification({:new_stream, track_id, %Membrane.H264{} = _format}, :demuxer, _ctx, state) do
+    Membrane.Logger.info("H264 video stream detected: track_id: #{track_id}")
 
-    video_config = state.video_config
-
-    spec =
-      if video_config[:codec] do
-        # Transcode path
-        build_video_transcode_spec(track_id, video_config)
-      else
-        # Passthrough path
-        build_video_passthrough_spec(track_id)
-      end
-
+    spec = build_video_pipeline(track_id, state.config)
     new_state = %{state | stream_count: state.stream_count + 1}
+
     {[spec: spec], new_state}
   end
 
@@ -100,7 +79,6 @@ defmodule Observatory.Membrane.TranscodePipeline do
       "Unknown stream format: track_id=#{track_id}, format=#{inspect(stream_format)}"
     )
 
-    # Try to passthrough unknown streams
     spec =
       get_child(:demuxer)
       |> via_out(Pad.ref(:output, track_id))
@@ -114,6 +92,7 @@ defmodule Observatory.Membrane.TranscodePipeline do
   @impl true
   def handle_element_end_of_stream(:output_file, _pad, _ctx, state) do
     Membrane.Logger.info("Output file completed")
+    send_completion_event(state)
     {[terminate: :normal], state}
   end
 
@@ -130,56 +109,74 @@ defmodule Observatory.Membrane.TranscodePipeline do
 
   # Private functions
 
-  defp build_video_transcode_spec(track_id, config) do
-    has_resolution = Map.get(config, :width) != nil && Map.get(config, :height) != nil
-
-    encoder_opts = %H264.FFmpeg.Encoder{
-      preset: Map.get(config, :preset, :medium),
-      crf: Map.get(config, :crf, 23)
-    }
-
-    # Build the processing chain
-    chain =
-      get_child(:demuxer)
-      |> via_out(Pad.ref(:output, track_id))
-      |> child({:video_parser, track_id}, H264.Parser)
-      |> child({:video_decoder, track_id}, H264.FFmpeg.Decoder)
-
-    # Add scaler only if resolution is specified
-    chain =
-      if has_resolution do
-        scaler_opts = %{
-          output_width: Map.get(config, :width),
-          output_height: Map.get(config, :height)
-        }
-
-        chain
-        |> child({:video_scaler, track_id}, struct!(SWScale.Scaler, scaler_opts))
-        |> child({:video_encoder, track_id}, encoder_opts)
-      else
-        chain
-        |> child({:video_encoder, track_id}, encoder_opts)
-      end
-
-    # Add output parser and connect to muxer
-    chain =
-      chain
-      |> child({:video_parser_out, track_id}, H264.Parser)
-
-    # Return the full spec
-    [
-      chain,
-      get_child({:video_parser_out, track_id})
-      |> via_in(Pad.ref(:input, track_id), options: [track_id: track_id])
-      |> get_child(:muxer)
-    ]
+  defp build_video_pipeline(track_id, config) do
+    needs_encode = config.codec != nil || config.resolution != nil || config.crf != nil
+    
+    if needs_encode do
+      build_transcode_chain(track_id, config)
+    else
+      build_passthrough_chain(track_id)
+    end
   end
 
-  defp build_video_passthrough_spec(track_id) do
-    # Direct passthrough from demuxer to muxer
+  def build_transcode_chain(track_id, config) do
+    Membrane.Logger.info("Building transcode chain for track #{track_id}")
+
+    encoder_opts = %H264.FFmpeg.Encoder{
+      preset: config.preset || :medium,
+      crf: config.crf || 23
+    }
+
+    chain = 
+      get_child(:demuxer)
+      |> via_out(Pad.ref(:output, track_id))
+      |> child({:parser_in, track_id}, H264.Parser)
+      |> child({:decoder, track_id}, H264.FFmpeg.Decoder)
+
+     chain = if config.resolution do
+      {width, height} = config.resolution
+      Membrane.Logger.info("Adding scaler: #{width}x#{height}")
+      
+      chain
+      |> child({:scaler, track_id}, %SWScale.Scaler{
+        output_width: width,
+        output_height: height
+      })
+    else
+      chain
+    end
+
+    chain
+    |> child({:encoder, track_id}, encoder_opts)
+    |> child({:parser_out, track_id}, H264.Parser)
+    |> via_in(Pad.ref(:input, track_id), options: [track_id: track_id])
+    |> get_child(:muxer)
+  end
+
+  defp build_passthrough_chain(track_id) do
+    Membrane.Logger.info("Building passthrough chain for track #{track_id}")
+
     get_child(:demuxer)
     |> via_out(Pad.ref(:output, track_id))
     |> via_in(Pad.ref(:input, track_id), options: [track_id: track_id])
     |> get_child(:muxer)
+  end
+
+  defp send_completion_event(state) do
+    if state.callback_pid do
+      duration = DateTime.diff(DateTime.utc_now(), state.started_at, :millisecond) / 1000
+
+      event = %ProcessSchema.ProcessEvent{
+        timestamp: DateTime.utc_now(),
+        type: :completed,
+        message: "Transcoding completed",
+        data: %{
+          frames_processed: state.frames_encoded,
+          duration_sec: duration
+        }
+      }
+
+      send(state.callback_pid, {:membrane_event, :completed, event})
+    end
   end
 end

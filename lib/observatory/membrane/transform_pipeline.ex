@@ -97,8 +97,6 @@ defmodule Observatory.Membrane.TransformPipeline do
     {[], new_state}
   end
 
-  # Private functions
-
   defp send_progress_event(state) do
     if state.callback_pid do
       event = %ProcessSchema.ProcessEvent{

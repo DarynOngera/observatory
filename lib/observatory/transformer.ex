@@ -2,6 +2,7 @@ defmodule Observatory.Transformer do
   @moduledoc """
   High-level API for media transformations using Membrane.
   """
+  require Logger 
 
   alias Observatory.{
     Introspector,
@@ -10,6 +11,8 @@ defmodule Observatory.Transformer do
     Membrane.PipelineSupervisor
   }
 
+  @default_timeout 120_000
+
   @doc """
   Transforms media using Membrane pipeline.
   """
@@ -17,23 +20,29 @@ defmodule Observatory.Transformer do
           {:ok, ProcessSchema.t()} | {:error, term()}
   def transform(input_file, output_file, config, opts \\ []) do
     progress_callback = Keyword.get(opts, :progress_callback)
+    timeout = Keyword.get(opts, :timeout, @default_timeout)
+
+    Logger.info("Starting transformation: #{input_file} -> #{output_file}")
+    Logger.info("Config: #{inspect(config)}")
     
     # Start pipeline
     case PipelineSupervisor.start_pipeline(input_file, output_file, config) do
       {:ok, ref} ->
         # Wait for completion with optional progress tracking
-        wait_for_completion(ref, progress_callback)
+        result = wait_for_completion(ref, progress_callback, timeout)
+        Logger.info("Transformation result: #{result}")
+        result
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, reason} = error ->
+        Logger.error("Failed to start pipeline: #{inspect(reason)}")
+        error
     end
   end
 
   @doc """
   Transforms and compares using Membrane.
   """
-  @spec transform_and_compare(String.t(), String.t(), ProcessSchema.TransformConfig.t(), keyword()) ::
-          {:ok, map()} | {:error, term()}
+  @spec transform_and_compare(String.t(), String.t(), ProcessSchema.TransformConfig.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def transform_and_compare(input_file, output_file, config, opts \\ []) do
     analyze_input? = Keyword.get(opts, :analyze_input, true)
     analyze_output? = Keyword.get(opts, :analyze_output, true)
@@ -65,32 +74,44 @@ defmodule Observatory.Transformer do
 
   # Private functions
 
-  defp wait_for_completion(ref, callback, poll_interval \\ 100) do
-    case PipelineSupervisor.get_pipeline_state(ref) do
-      {:ok, process} ->
-        if callback do
-          callback.(process)
-        end
+  defp wait_for_completion(ref, callback, timeout) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_for_completion(ref, callback, deadline, 200)
+  end
 
-        case process.status do
-          :completed ->
-            {:ok, process}
+  defp do_wait_for_completion(ref, callback, deadline, poll_interval) do
+    if System.monotonic_time(:millisecond) >= deadline do
+      Logger.error("Timeout exceeded")
+      PipelineSupervisor.stop_pipeline(ref)
+    else
+      case PipelineSupervisor.get_pipeline_state(ref) do
+        {:ok, process} ->
+          if callback do
+            callback.(process)
+          end
 
-          :failed ->
-            {:error, process.error}
+          case process.status do
+            :completed ->
+              Logger.info("Pipeline completed successfully")
+              {:ok, process}
 
-          _ ->
+            :failed ->
+              Logger.error("Pipeline failed #{process.error}")
+              {:error, process.error}
+            _ ->
             # Still running, poll again
-            Process.sleep(poll_interval)
-            wait_for_completion(ref, callback, poll_interval)
-        end
-
-      {:error, :not_found} ->
-        {:error, :pipeline_not_found}
+              Process.sleep(poll_interval)
+              do_wait_for_completion(ref, callback, deadline, poll_interval)
+          end
+        {:error, :not_found} ->
+          Logger.error("Pipeline not found")
+          {:error, :pipeline_not_found}
+      end
     end
   end
 
   defp maybe_analyze_input(input_file, true) do
+    Logger.info("Analyzing input file")
     with {:ok, schema} <- Introspector.analyze(input_file),
          {:ok, gop_stats} <- GOPAnalyzer.analyze(input_file) do
       {:ok, schema, gop_stats}
@@ -102,6 +123,7 @@ defmodule Observatory.Transformer do
   end
 
   defp maybe_analyze_output(output_file, true) do
+    Logger.info("Analyzing output file")
     with {:ok, schema} <- Introspector.analyze(output_file),
          {:ok, gop_stats} <- GOPAnalyzer.analyze(output_file) do
       {:ok, schema, gop_stats}

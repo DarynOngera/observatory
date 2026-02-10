@@ -43,10 +43,10 @@ defmodule Observatory.ProcessSchema do
       container: String.t(),
       video_bitrate: pos_integer() | nil,
       audio_bitrate: pos_integer() | nil,
-      resolution: {pos_integer(), pos_integer()},
-      frame_rate: {pos_integer(), pos_integer()},
+      resolution: {pos_integer(), pos_integer()} | nil,
+      frame_rate: {pos_integer(), pos_integer()} | nil,
       gop_size: pos_integer() | nil,
-      preset: String.t() | nil,
+      preset: atom() | String.t() | nil,
       crf: pos_integer() | nil,
       extra_params: map()
     }
