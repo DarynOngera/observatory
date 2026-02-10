@@ -51,16 +51,16 @@ defmodule Observatory.MixProject do
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
       {:membrane_core, "~> 1.1"},
       {:membrane_file_plugin, "~> 0.17.0"},
-      
+
       # Membrane Multimedia
       {:membrane_h264_plugin, "~> 0.9.0"},
       {:membrane_aac_plugin, "~> 0.18.0"},
       {:membrane_mp4_plugin, "~> 0.35.0"},
       {:membrane_realtimer_plugin, "~> 0.9.0"},
-      
+      {:membrane_h264_ffmpeg_plugin, "~> 0.32.6"},
       # Membrane FFmpeg Integration
       {:membrane_ffmpeg_swresample_plugin, "~> 0.20.0"},
-      {:membrane_ffmpeg_swscale_plugin, "~> 0.16.0"}      
+      {:membrane_ffmpeg_swscale_plugin, "~> 0.16.0"}
     ]
   end
 
