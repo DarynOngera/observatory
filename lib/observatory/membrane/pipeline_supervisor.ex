@@ -17,8 +17,7 @@ defmodule Observatory.Membrane.PipelineSupervisor do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @spec start_pipeline(String.t(), String.t(), ProcessSchema.TransformConfig.t()) ::
-          {:ok, pipeline_ref()} | {:error, term()}
+  @spec start_pipeline(String.t(), String.t(), ProcessSchema.TransformConfig.t()) :: {:ok, pipeline_ref()} | {:error, term()}
   def start_pipeline(input_file, output_file, config) do
     GenServer.call(__MODULE__, {:start_pipeline, input_file, output_file, config}, 30_000)
   end
