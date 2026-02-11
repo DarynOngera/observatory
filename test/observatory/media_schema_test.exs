@@ -4,7 +4,6 @@ defmodule Observatory.MediaSchemaTest do
   alias Observatory.MediaSchema
   alias Observatory.MediaSchema.{Format, Stream}
 
-
   describe "MediaSchema struct" do
     test "creates valid schema with all required fields" do
       schema = %MediaSchema{
