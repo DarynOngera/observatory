@@ -1,0 +1,395 @@
+# Observatory IEx Commands Reference
+# ==================================
+# 
+# This file contains useful IEx commands for interacting with all modules
+# in the Observatory project.
+#
+# Usage: Start iex with `iex -S mix` and copy/paste commands
+
+# =============================================================================
+# SETUP
+# =============================================================================
+
+# Set sample file paths (update these to match your files)
+input_file = "/path/to/your/input.mp4"
+output_file = "/path/to/your/output.mp4"
+
+# Or use a test file from the fixtures
+# input_file = "test/fixtures/sample.mp4"
+
+# =============================================================================
+# INTROSPECTOR MODULE
+# =============================================================================
+
+# Analyze a media file to get basic metadata
+{:ok, media_schema} = Observatory.Introspector.analyze(input_file)
+
+# Check if ffprobe is available
+Observatory.Introspector.ffprobe_available?()
+
+# Get ffprobe version
+{:ok, version} = Observatory.Introspector.ffprobe_version()
+
+# Access the media schema data
+media_schema.file_path
+media_schema.format.duration_sec
+media_schema.format.size_bytes
+media_schema.format.bitrate_bps
+media_schema.streams
+
+# =============================================================================
+# MEDIA_SCHEMA MODULE
+# =============================================================================
+
+# Get all video streams
+video_streams = Observatory.MediaSchema.video_streams(media_schema)
+
+# Get all audio streams  
+audio_streams = Observatory.MediaSchema.audio_streams(media_schema)
+
+# Get primary video stream
+video_stream = Observatory.MediaSchema.primary_video_stream(media_schema)
+
+# Get primary audio stream
+audio_stream = Observatory.MediaSchema.primary_audio_stream(media_schema)
+
+# Get total bitrate
+Observatory.MediaSchema.total_stream_bitrate(media_schema)
+
+# Access stream data
+video_stream.width
+video_stream.height
+video_stream.codec_name
+video_stream.frame_rate
+
+# Use Stream helper functions
+Observatory.MediaSchema.Stream.video?(video_stream)
+Observatory.MediaSchema.Stream.audio?(audio_stream)
+Observatory.MediaSchema.Stream.fps(video_stream)
+Observatory.MediaSchema.Stream.resolution(video_stream)
+
+# =============================================================================
+# GOP ANALYZER MODULE
+# =============================================================================
+
+# Analyze GOP structure of a video file
+{:ok, gop_stats} = Observatory.GOPAnalyzer.analyze(input_file)
+
+# Access GOP statistics
+gop_stats.file_path
+gop_stats.total_frames
+gop_stats.gops
+
+# Access aggregate stats
+gop_stats.stats.total_gops
+gop_stats.stats.avg_gop_size
+gop_stats.stats.max_gop_size
+gop_stats.stats.min_gop_size
+gop_stats.stats.seekability_score
+
+# Look at individual GOPs
+List.first(gop_stats.gops)
+
+# =============================================================================
+# TRANSFORMER MODULE
+# =============================================================================
+
+# Simple copy transformation (no transcoding)
+config = %Observatory.ProcessSchema.TransformConfig{
+  codec: nil,  # nil means copy
+  container: "mp4"
+}
+
+{:ok, process} = Observatory.Transformer.transform(input_file, output_file, config)
+
+# Transform with transcoding
+config = %Observatory.ProcessSchema.TransformConfig{
+  codec: "libx264",
+  container: "mp4",
+  preset: :medium,
+  crf: 23,
+  resolution: {1280, 720}
+}
+
+{:ok, process} = Observatory.Transformer.transform(input_file, output_file, config)
+
+# Transform with progress callback
+progress_fn = fn process ->
+  case process.status do
+    :running -> IO.write("\rProcessing...")
+    :completed -> IO.puts("\nDone!")
+    :failed -> IO.puts("\nFailed!")
+    _ -> :ok
+  end
+end
+
+{:ok, process} = Observatory.Transformer.transform(
+  input_file,
+  output_file,
+  config,
+  progress_callback: progress_fn,
+  timeout: 300_000
+)
+
+# Transform and compare input vs output
+{:ok, comparison} = Observatory.Transformer.transform_and_compare(
+  input_file,
+  output_file,
+  config,
+  analyze_input: true,
+  analyze_output: true
+)
+
+# Access comparison results
+comparison.input_schema
+comparison.output_schema
+comparison.input_gop_stats
+comparison.output_gop_stats
+comparison.metrics
+
+# =============================================================================
+# PROCESS_SCHEMA MODULE
+# =============================================================================
+
+# Create a new process configuration
+config = %Observatory.ProcessSchema.TransformConfig{
+  codec: "libx264",
+  container: "mp4",
+  preset: :fast,
+  crf: 28
+}
+
+# Create a new process
+process = Observatory.ProcessSchema.new(input_file, output_file, config)
+
+# Mark process as running
+running_process = Observatory.ProcessSchema.mark_running(process)
+
+# Add an event
+event = %Observatory.ProcessSchema.ProcessEvent{
+  timestamp: DateTime.utc_now(),
+  type: :progress,
+  message: "Processing frame 100",
+  data: %{frame: 100, fps: 30.5}
+}
+
+process_with_event = Observatory.ProcessSchema.add_event(running_process, event)
+
+# Mark as completed with stats
+stats = %Observatory.ProcessSchema.ProcessStats{
+  duration_sec: 45.2,
+  frames_processed: 1500,
+  fps: 33.2,
+  bitrate_kbps: 2500.0,
+  speed: 1.1,
+  size_bytes: 14_123_456,
+  quality_score: 85.5
+}
+
+completed_process = Observatory.ProcessSchema.mark_completed(running_process, stats)
+
+# Mark as failed
+failed_process = Observatory.ProcessSchema.mark_failed(running_process, "Out of memory")
+
+# Add progress data
+progress_process = Observatory.ProcessSchema.add_progress(
+  running_process,
+  %{frame: 200, fps: 28.5, bitrate: 2400}
+)
+
+# =============================================================================
+# FFPROBE_PARSER MODULE
+# =============================================================================
+
+# Parse raw ffprobe JSON output
+json_output = ~s({"format": {"duration": "120.5", "size": "10485760"}, "streams": []})
+{:ok, parsed} = Observatory.FFprobeParser.parse(json_output)
+
+# Decode JSON
+data = Observatory.FFprobeParser.decode_json(json_output)
+
+# Build schema from components
+format_data = %{"format_name" => "mp4", "duration" => "120.5", "size" => "10485760"}
+streams_data = [%{"index" => 0, "codec_type" => "video", "codec_name" => "h264"}]
+Observatory.FFprobeParser.build_schema("test.mp4", format_data, streams_data)
+
+# =============================================================================
+# PIPELINE SUPERVISOR MODULE
+# =============================================================================
+
+# Start a pipeline directly
+{:ok, ref} = Observatory.Membrane.PipelineSupervisor.start_pipeline(
+  input_file,
+  output_file,
+  config
+)
+
+# Get pipeline state
+{:ok, process} = Observatory.Membrane.PipelineSupervisor.get_pipeline_state(ref)
+
+# Stop a pipeline
+Observatory.Membrane.PipelineSupervisor.stop_pipeline(ref)
+
+# =============================================================================
+# MEMBRANE PIPELINES (Direct Usage)
+# =============================================================================
+
+# Start SimplePipeline directly (copy without transcoding)
+{:ok, _supervisor, pipeline} = Membrane.Pipeline.start_link(
+  Observatory.Membrane.SimplePipeline,
+  input_file: input_file,
+  output_file: output_file,
+  callback_pid: self()
+)
+
+# Start TranscodePipeline directly
+{:ok, _supervisor, pipeline} = Membrane.Pipeline.start_link(
+  Observatory.Membrane.TranscodePipeline,
+  input_file: input_file,
+  output_file: output_file,
+  config: config,
+  callback_pid: self()
+)
+
+# Receive completion events
+receive do
+  {:membrane_event, :completed, event} ->
+    IO.puts("Pipeline completed: #{event.message}")
+    IO.inspect(event.data)
+after
+  300_000 ->
+    IO.puts("Timeout waiting for completion")
+end
+
+# =============================================================================
+# UTILITY COMMANDS
+# =============================================================================
+
+# Check if output file exists
+File.exists?(output_file)
+
+# Get file size
+{:ok, stat} = File.stat(output_file)
+stat.size
+
+# List video files in a directory
+Path.wildcard("/home/user/Videos/*.mp4")
+
+# Calculate file size in MB
+bytes_to_mb = fn bytes -> Float.round(bytes / 1_048_576, 2) end
+
+# Format duration
+duration_str = fn seconds -> 
+  minutes = div(trunc(seconds), 60)
+  secs = rem(trunc(seconds), 60)
+  "#{minutes}m #{secs}s"
+end
+
+# Calculate bitrate reduction
+bitrate_reduction = fn input_bps, output_bps ->
+  reduction = (input_bps - output_bps) / input_bps * 100
+  Float.round(reduction, 1)
+end
+
+# =============================================================================
+# BATCH PROCESSING EXAMPLE
+# =============================================================================
+
+# Process multiple files
+input_files = Path.wildcard("/path/to/videos/*.mp4")
+output_dir = "/path/to/output"
+
+config = %Observatory.ProcessSchema.TransformConfig{
+  codec: "libx264",
+  container: "mp4",
+  preset: :fast,
+  crf: 28,
+  resolution: {1280, 720}
+}
+
+results = Enum.map(input_files, fn input ->
+  output = Path.join(output_dir, Path.basename(input))
+  
+  case Observatory.Transformer.transform(input, output, config) do
+    {:ok, process} -> 
+      IO.puts("✓ #{Path.basename(input)} -> #{process.stats.size_bytes} bytes")
+      {:ok, input}
+    {:error, reason} -> 
+      IO.puts("✗ #{Path.basename(input)}: #{inspect(reason)}")
+      {:error, input, reason}
+  end
+end)
+
+# Summarize results
+successful = Enum.filter(results, fn {:ok, _} -> true; _ -> false end)
+failed = Enum.filter(results, fn {:error, _, _} -> true; _ -> false end)
+
+IO.puts("Successfully processed: #{length(successful)}")
+IO.puts("Failed: #{length(failed)}")
+
+# =============================================================================
+# DEBUGGING COMMANDS
+# =============================================================================
+
+# Check application status
+Application.started_applications()
+
+# Check if Observatory is running
+Application.ensure_started(:observatory)
+
+# List all running processes
+Process.list() |> length()
+
+# Get process info
+Process.info(self())
+
+# Monitor a pipeline process
+pid = self()
+ref = Process.monitor(pid)
+
+# Check memory usage
+:erlang.memory()
+
+# Garbage collect
+:erlang.garbage_collect()
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+# Helper to print media info
+defmodule MediaInfo do
+  def print(%Observatory.MediaSchema{} = schema) do
+    IO.puts("\n=== Media Info ===")
+    IO.puts("File: #{schema.file_path}")
+    IO.puts("Duration: #{Float.round(schema.format.duration_sec, 2)}s")
+    IO.puts("Size: #{Float.round(schema.format.size_bytes / 1_048_576, 2)} MB")
+    IO.puts("Bitrate: #{Float.round(schema.format.bitrate_bps / 1000, 0)} kbps")
+    IO.puts("Streams: #{length(schema.streams)}")
+    
+    schema.streams
+    |> Enum.each(fn stream ->
+      IO.puts("  [#{stream.type}] #{stream.codec_name} - #{Observatory.MediaSchema.Stream.resolution(stream) || "N/A"}")
+    end)
+  end
+end
+
+# Usage: MediaInfo.print(media_schema)
+
+# Helper to print GOP info
+defmodule GOPInfo do
+  def print(%Observatory.GOPStatsSchema{} = stats) do
+    IO.puts("\n=== GOP Analysis ===")
+    IO.puts("Total Frames: #{stats.total_frames}")
+    IO.puts("Total GOPs: #{stats.stats.total_gops}")
+    IO.puts("Avg GOP Size: #{Float.round(stats.stats.avg_gop_size, 1)} frames")
+    IO.puts("Seekability Score: #{Float.round(stats.stats.seekability_score, 1)}/100")
+    
+    if length(stats.gops) > 0 do
+      first_gop = List.first(stats.gops)
+      IO.puts("First GOP: #{first_gop.size} frames (IDR: #{first_gop.idr?})")
+    end
+  end
+end
+
+# Usage: GOPInfo.print(gop_stats)
