@@ -1,18 +1,18 @@
 defmodule Observatory.MediaSchema do
   @moduledoc """
-  Normalized representation of media file structure
-  (Normalize ffmpeg output)
-"""
+    Normalized representation of media file structure
+    (Normalize ffmpeg output)
+  """
 
   alias __MODULE__.{Format, Stream}
 
   @type t :: %__MODULE__{
-    file_path: String.t(),
-    format: Format.t(),
-    streams: [Stream.t()],
-    analyzed_at: DateTime.t()
-  }
-  #@enforce_keys [:file_path, :format, :streams, :analyzed_at]
+          file_path: String.t(),
+          format: Format.t(),
+          streams: [Stream.t()],
+          analyzed_at: DateTime.t()
+        }
+  # @enforce_keys [:file_path, :format, :streams, :analyzed_at]
   defstruct [
     :file_path,
     :format,
@@ -22,14 +22,14 @@ defmodule Observatory.MediaSchema do
 
   defmodule Format do
     @type t :: %__MODULE__{
-      container_type: String.t(),
-      duration_sec: float(),
-      size_bytes: non_neg_integer(),
-      bitrate_bps: non_neg_integer(),
-      metadata: map()
-    }
+            container_type: String.t(),
+            duration_sec: float(),
+            size_bytes: non_neg_integer(),
+            bitrate_bps: non_neg_integer(),
+            metadata: map()
+          }
 
-    #@enforce_keys [:container_type, :duration_sec, :size_bytes, :bitrate_bps]
+    # @enforce_keys [:container_type, :duration_sec, :size_bytes, :bitrate_bps]
     defstruct [
       :container_type,
       :duration_sec,
@@ -43,27 +43,27 @@ defmodule Observatory.MediaSchema do
     @type stream_type :: :video | :audio | :subtitle | :uknown
 
     @type t :: %__MODULE__{
-      index: non_neg_integer(),
-      type: stream_type(),
-      codec_name: String.t(),
-      codec_profile: String.t(),
-      timebase: {pos_integer(), pos_integer()},
-      duration_sec: float(),
-      bitrate_bps: non_neg_integer() | nil,
-      #Video specific
-      width: pos_integer() | nil,
-      height: pos_integer() | nil,
-      frame_rate: {pos_integer(), pos_integer()} | nil,
-      pixel_format: String.t() | nil,
-      color_space: String.t() | nil, 
-      color_range: String.t() | nil,
-      #Audio specific
-      sample_rate: pos_integer() | nil,
-      channels: pos_integer() | nil,
-      channel_layout: String.t() | nil
-    }
-    
-    #@enforce_keys [:index, :type, :codec_name, :timebase]
+            index: non_neg_integer(),
+            type: stream_type(),
+            codec_name: String.t(),
+            codec_profile: String.t(),
+            timebase: {pos_integer(), pos_integer()},
+            duration_sec: float(),
+            bitrate_bps: non_neg_integer() | nil,
+            # Video specific
+            width: pos_integer() | nil,
+            height: pos_integer() | nil,
+            frame_rate: {pos_integer(), pos_integer()} | nil,
+            pixel_format: String.t() | nil,
+            color_space: String.t() | nil,
+            color_range: String.t() | nil,
+            # Audio specific
+            sample_rate: pos_integer() | nil,
+            channels: pos_integer() | nil,
+            channel_layout: String.t() | nil
+          }
+
+    # @enforce_keys [:index, :type, :codec_name, :timebase]
     defstruct [
       :index,
       :type,
@@ -90,7 +90,7 @@ defmodule Observatory.MediaSchema do
     """
     @spec video?(t()) :: boolean()
     def video?(%__MODULE__{type: :video, width: w, height: h})
-      when is_integer(w) and is_integer(h) and w > 0 and h > 0 do
+        when is_integer(w) and is_integer(h) and w > 0 and h > 0 do
       true
     end
 
@@ -101,8 +101,8 @@ defmodule Observatory.MediaSchema do
     """
     @spec audio?(t()) :: boolean()
     def audio?(%__MODULE__{type: :audio, sample_rate: sr})
-      when is_integer(sr) and sr > 0 do 
-      true 
+        when is_integer(sr) and sr > 0 do
+      true
     end
 
     def audio?(%__MODULE__{}), do: false
@@ -110,9 +110,9 @@ defmodule Observatory.MediaSchema do
     @doc """
     Calculates frames per second from frame_rate tuple.
     Returns nil if frame_rate is not set.
-    
+
     ## Examples
-    
+
         iex> stream = %Stream{frame_rate: {30, 1}, ...}
         iex> Stream.fps(stream)
         30.0
@@ -131,9 +131,9 @@ defmodule Observatory.MediaSchema do
     @doc """
     Calculates resolution as "WIDTHxHEIGHT" string.
     Returns nil if width or height not set.
-    
+
     ## Examples
-    
+
         iex> stream = %Stream{width: 1920, height: 1080}
         iex> Stream.resolution(stream)
         "1920x1080"

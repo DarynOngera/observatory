@@ -1,41 +1,41 @@
 defmodule Observatory.FFprobeParser do
   @moduledoc """
-  Parses ffprobe JSON output into the Media schema
+    Parses ffprobe JSON output into the Media schema
 
-   This is a pure transformation module - no system calls.
-  Expects JSON output from:
-  
-      ffprobe -v error -show_format -show_streams -print_format json input.mp4
-  
-  Responsibilities
-  
-  - Parse ffprobe JSON structure
-  - Normalize field types (strings to numbers, tuples, etc.)
-  - Map ffprobe keys to MediaSchema fields
-  - Handle missing/optional fields gracefully
-"""
-  alias Observatory.MediaSchema 
+     This is a pure transformation module - no system calls.
+    Expects JSON output from:
+    
+        ffprobe -v error -show_format -show_streams -print_format json input.mp4
+    
+    Responsibilities
+    
+    - Parse ffprobe JSON structure
+    - Normalize field types (strings to numbers, tuples, etc.)
+    - Map ffprobe keys to MediaSchema fields
+    - Handle missing/optional fields gracefully
+  """
+  alias Observatory.MediaSchema
   alias Observatory.MediaSchema.{Format, Stream}
 
   @doc """
-  Parses ffprobe JSON string into MediaSchema.
-  
-  Expected JSON Structure
-  
-      {
-        "format": {
-          "filename": "/path/to/file.mp4",
-          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
-          "duration": "120.500000",
-          "size": "36937500",
-          "bit_rate": "2450000",
-          "tags": {...}
-        },
-        "streams": [...]
-      }
-"""
+    Parses ffprobe JSON string into MediaSchema.
+    
+    Expected JSON Structure
+    
+        {
+          "format": {
+            "filename": "/path/to/file.mp4",
+            "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+            "duration": "120.500000",
+            "size": "36937500",
+            "bit_rate": "2450000",
+            "tags": {...}
+          },
+          "streams": [...]
+        }
+  """
 
-  @spec parse(String.t()) :: {:ok,  MediaSchema.t()} | {:error, atom()}
+  @spec parse(String.t()) :: {:ok, MediaSchema.t()} | {:error, atom()}
   def parse(json_string) when is_binary(json_string) do
     with {:ok, data} <- decode_json(json_string),
          {:ok, format_data} <- extract_format(data),
@@ -56,12 +56,12 @@ defmodule Observatory.FFprobeParser do
   end
 
   defp extract_format(_), do: {:error, :missing_format}
-  
+
   defp extract_streams(%{"streams" => streams}) when is_list(streams) do
     {:ok, streams}
-  end 
+  end
 
-  defp extract_streams(_), do: {:error, :missing_streams} 
+  defp extract_streams(_), do: {:error, :missing_streams}
 
   def build_schema(file_path, format_data, streams_data) do
     schema = %MediaSchema{
@@ -70,6 +70,7 @@ defmodule Observatory.FFprobeParser do
       streams: Enum.map(streams_data, &parse_stream/1),
       analyzed_at: DateTime.utc_now()
     }
+
     {:ok, schema}
   end
 
@@ -107,6 +108,7 @@ defmodule Observatory.FFprobeParser do
   defp parse_stream_type(_), do: :unknown
 
   defp parse_timebase(nil), do: {1, 1000}
+
   defp parse_timebase(tb_string) when is_binary(tb_string) do
     case String.split(tb_string, "/") do
       [num_str, den_str] ->
@@ -117,11 +119,14 @@ defmodule Observatory.FFprobeParser do
         else
           _ -> {1, 1000}
         end
-      _ -> {1, 1000}
+
+      _ ->
+        {1, 1000}
     end
   end
 
   defp parse_frame_rate(nil), do: nil
+
   defp parse_frame_rate(fr_string) when is_binary(fr_string) do
     case String.split(fr_string, "/") do
       [num_str, den_str] ->
@@ -132,32 +137,37 @@ defmodule Observatory.FFprobeParser do
         else
           _ -> nil
         end
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
 
-   defp add_video_fields(stream, data) do
-    %{stream |
-      width: data["width"],
-      height: data["height"],
-      frame_rate: parse_frame_rate(data["r_frame_rate"]),
-      pixel_format: data["pix_fmt"],
-      color_space: data["color_space"],
-      color_range: data["color_range"]
+  defp add_video_fields(stream, data) do
+    %{
+      stream
+      | width: data["width"],
+        height: data["height"],
+        frame_rate: parse_frame_rate(data["r_frame_rate"]),
+        pixel_format: data["pix_fmt"],
+        color_space: data["color_space"],
+        color_range: data["color_range"]
     }
   end
 
-   defp add_audio_fields(stream, data) do
-    %{stream |
-      sample_rate: parse_int(data["sample_rate"]),
-      channels: data["channels"],
-      channel_layout: data["channel_layout"]
+  defp add_audio_fields(stream, data) do
+    %{
+      stream
+      | sample_rate: parse_int(data["sample_rate"]),
+        channels: data["channels"],
+        channel_layout: data["channel_layout"]
     }
   end
 
   defp parse_float(nil), do: nil
   defp parse_float(val) when is_float(val), do: val
   defp parse_float(val) when is_integer(val), do: val / 1
+
   defp parse_float(val) when is_binary(val) do
     case Float.parse(val) do
       {float, _} -> float
@@ -167,11 +177,11 @@ defmodule Observatory.FFprobeParser do
 
   defp parse_int(nil), do: nil
   defp parse_int(val) when is_integer(val), do: val
+
   defp parse_int(val) when is_binary(val) do
     case Integer.parse(val) do
       {int, _} -> int
       :error -> nil
     end
   end
-
 end

@@ -27,11 +27,12 @@ defmodule Mix.Tasks.Observatory.Transform do
 
     compare? = Keyword.get(opts, :compare, false)
 
-    result = if compare? do
-      transform_with_comparison(input_file, output_file, config)
-    else
-      transform_simple(input_file, output_file, config)
-    end
+    result =
+      if compare? do
+        transform_with_comparison(input_file, output_file, config)
+      else
+        transform_simple(input_file, output_file, config)
+      end
 
     case result do
       {:ok, _} ->
@@ -47,21 +48,24 @@ defmodule Mix.Tasks.Observatory.Transform do
   end
 
   defp parse_opts(args) do
-    {opts, _, _} = OptionParser.parse(args,
-      strict: [
-        codec: :string,
-        preset: :string,
-        crf: :integer,
-        gop: :integer,
-        compare: :boolean
-      ]
-    )
+    {opts, _, _} =
+      OptionParser.parse(args,
+        strict: [
+          codec: :string,
+          preset: :string,
+          crf: :integer,
+          gop: :integer,
+          compare: :boolean
+        ]
+      )
+
     opts
   end
 
   defp build_config(opts) do
     %ProcessSchema.TransformConfig{
-      codec: Keyword.get(opts, :codec),  # nil means no transcode
+      # nil means no transcode
+      codec: Keyword.get(opts, :codec),
       container: "mp4",
       preset: Keyword.get(opts, :preset),
       crf: Keyword.get(opts, :crf),
@@ -81,12 +85,13 @@ defmodule Mix.Tasks.Observatory.Transform do
   defp transform_with_comparison(input_file, output_file, config) do
     IO.puts("Analyzing input...")
 
-    result = Transformer.transform_and_compare(
-      input_file,
-      output_file,
-      config,
-      progress_callback: &print_progress/1
-    )
+    result =
+      Transformer.transform_and_compare(
+        input_file,
+        output_file,
+        config,
+        progress_callback: &print_progress/1
+      )
 
     case result do
       {:ok, comparison} ->
@@ -141,20 +146,33 @@ defmodule Mix.Tasks.Observatory.Transform do
     IO.puts("  Change: #{format_percentage(metrics.bitrate_change)}")
 
     IO.puts("\nGOP Structure:")
-    IO.puts("  Input Avg GOP Size:  #{Float.round(comparison.input_gop_stats.stats.avg_gop_size, 1)} frames")
-    IO.puts("  Output Avg GOP Size: #{Float.round(comparison.output_gop_stats.stats.avg_gop_size, 1)} frames")
+
+    IO.puts(
+      "  Input Avg GOP Size:  #{Float.round(comparison.input_gop_stats.stats.avg_gop_size, 1)} frames"
+    )
+
+    IO.puts(
+      "  Output Avg GOP Size: #{Float.round(comparison.output_gop_stats.stats.avg_gop_size, 1)} frames"
+    )
+
     IO.puts("  Change: #{format_percentage(metrics.gop_size_change)}")
 
     IO.puts("\nSeekability:")
     IO.puts("  Input:  #{Float.round(comparison.input_gop_stats.stats.seekability_score, 1)}/100")
-    IO.puts("  Output: #{Float.round(comparison.output_gop_stats.stats.seekability_score, 1)}/100")
+
+    IO.puts(
+      "  Output: #{Float.round(comparison.output_gop_stats.stats.seekability_score, 1)}/100"
+    )
+
     IO.puts("  Change: #{format_change(metrics.seekability_change)} points")
   end
 
   defp format_bytes(bytes) when bytes < 1024, do: "#{bytes} B"
+
   defp format_bytes(bytes) when bytes < 1024 * 1024 do
     "#{Float.round(bytes / 1024, 1)} KB"
   end
+
   defp format_bytes(bytes) do
     "#{Float.round(bytes / 1024 / 1024, 2)} MB"
   end

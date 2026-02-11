@@ -7,7 +7,7 @@ defmodule Observatory.Membrane.PipelineSupervisor do
   require Logger
 
   alias Observatory.ProcessSchema
-  alias Observatory.Membrane.{TransformPipeline, TranscodePipeline, SimplePipeline}
+  alias Observatory.Membrane.{TranscodePipeline, SimplePipeline}
 
   @type pipeline_ref :: reference()
 
@@ -17,7 +17,8 @@ defmodule Observatory.Membrane.PipelineSupervisor do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @spec start_pipeline(String.t(), String.t(), ProcessSchema.TransformConfig.t()) :: {:ok, pipeline_ref()} | {:error, term()}
+  @spec start_pipeline(String.t(), String.t(), ProcessSchema.TransformConfig.t()) ::
+          {:ok, pipeline_ref()} | {:error, term()}
   def start_pipeline(input_file, output_file, config) do
     GenServer.call(__MODULE__, {:start_pipeline, input_file, output_file, config}, 30_000)
   end
@@ -37,7 +38,8 @@ defmodule Observatory.Membrane.PipelineSupervisor do
   @impl true
   def init(_opts) do
     state = %{
-      pipelines: %{}  # ref => %{pid, process_schema}
+      # ref => %{pid, process_schema}
+      pipelines: %{}
     }
 
     {:ok, state}
@@ -95,7 +97,7 @@ defmodule Observatory.Membrane.PipelineSupervisor do
   @impl true
   def handle_call({:stop_pipeline, ref}, _from, state) do
     case Map.get(state.pipelines, ref) do
-      %{supervisor_pid: pid} ->
+      %{pipeline_pid: pid} ->
         Membrane.Pipeline.terminate(pid)
         new_state = update_in(state.pipelines, &Map.delete(&1, ref))
         {:reply, :ok, new_state}
@@ -118,28 +120,33 @@ defmodule Observatory.Membrane.PipelineSupervisor do
 
   @impl true
   def handle_info({:membrane_event, :progress, event}, state) do
-    new_state = update_all_pipelines(state, fn process ->
-      ProcessSchema.add_event(process, event)
-    end)
+    new_state =
+      update_all_pipelines(state, fn process ->
+        ProcessSchema.add_event(process, event)
+      end)
 
     {:noreply, new_state}
   end
 
   @impl true
   def handle_info({:membrane_event, :completed, event}, state) do
-    new_state = update_all_pipelines(state, fn process ->
-      stats = extract_stats_from_event(event)
-      ProcessSchema.mark_completed(process, stats)
-    end)
+    pipeline_pid = event.data[:pipeline_pid]
+
+    new_state =
+      update_pipeline_by_pid(state, pipeline_pid, fn process ->
+        stats = extract_stats_from_event(event)
+        ProcessSchema.mark_completed(process, stats)
+      end)
 
     {:noreply, new_state}
   end
 
   @impl true
-  def handle_info({:membrane_event, :error, error_msg}, state) do
-    new_state = update_all_pipelines(state, fn process ->
-      ProcessSchema.mark_failed(process, error_msg)
-    end)
+  def handle_info({:membrane_event, :error, %{pipeline_pid: pid, error: error_msg}}, state) do
+    new_state =
+      update_pipeline_by_pid(state, pid, fn process ->
+        ProcessSchema.mark_failed(process, error_msg)
+      end)
 
     {:noreply, new_state}
   end
@@ -149,35 +156,38 @@ defmodule Observatory.Membrane.PipelineSupervisor do
     Logger.info("Pipeline process #{inspect(pid)} terminated: #{inspect(reason)}")
 
     # Find the pipeline and mark it as completed or failed
-    new_state = update_in(state.pipelines, fn pipelines ->
-      Enum.map(pipelines, fn {ref, pipeline_state} ->
-        cond do
-          pipeline_state.supervisor_pid == pid || pipeline_state.pipeline_pid == pid ->
-            updated_process = case reason do
-              :normal -> 
-                stats = %ProcessSchema.ProcessStats{
-                  duration_sec: 0.0,
-                  frames_processed: 0,
-                  fps: 0.0,
-                  bitrate_kbps: 0.0,
-                  speed: 0.0,
-                  size_bytes: 0,
-                  quality_score: nil
-                }
-                ProcessSchema.mark_completed(pipeline_state.process, stats)
-              
-              _ -> 
-                ProcessSchema.mark_failed(pipeline_state.process, inspect(reason))
-            end
-            
-            {ref, %{pipeline_state | process: updated_process}}
-          
-          true ->
-            {ref, pipeline_state}
-        end
+    new_state =
+      update_in(state.pipelines, fn pipelines ->
+        Enum.map(pipelines, fn {ref, pipeline_state} ->
+          cond do
+            pipeline_state.supervisor_pid == pid || pipeline_state.pipeline_pid == pid ->
+              updated_process =
+                case reason do
+                  :normal ->
+                    stats = %ProcessSchema.ProcessStats{
+                      duration_sec: 0.0,
+                      frames_processed: 0,
+                      fps: 0.0,
+                      bitrate_kbps: 0.0,
+                      speed: 0.0,
+                      size_bytes: 0,
+                      quality_score: nil
+                    }
+
+                    ProcessSchema.mark_completed(pipeline_state.process, stats)
+
+                  _ ->
+                    ProcessSchema.mark_failed(pipeline_state.process, inspect(reason))
+                end
+
+              {ref, %{pipeline_state | process: updated_process}}
+
+            true ->
+              {ref, pipeline_state}
+          end
+        end)
+        |> Map.new()
       end)
-      |> Map.new()
-    end)
 
     {:noreply, new_state}
   end
@@ -196,17 +206,32 @@ defmodule Observatory.Membrane.PipelineSupervisor do
 
   defp needs_transcoding?(config) do
     config.codec != nil ||
-    config.resolution != nil ||
-    config.crf != nil ||
-    config.gop_size != nil ||
-    config.preset != nil
+      config.resolution != nil ||
+      config.crf != nil ||
+      config.gop_size != nil ||
+      config.preset != nil
   end
 
   defp update_all_pipelines(state, fun) do
-    new_pipelines = 
+    new_pipelines =
       state.pipelines
       |> Enum.map(fn {ref, pipeline_state} ->
         {ref, %{pipeline_state | process: fun.(pipeline_state.process)}}
+      end)
+      |> Map.new()
+
+    %{state | pipelines: new_pipelines}
+  end
+
+  defp update_pipeline_by_pid(state, pid, fun) do
+    new_pipelines =
+      state.pipelines
+      |> Enum.map(fn {ref, pipeline_state} ->
+        if pipeline_state.pipeline_pid == pid do
+          {ref, %{pipeline_state | process: fun.(pipeline_state.process)}}
+        else
+          {ref, pipeline_state}
+        end
       end)
       |> Map.new()
 

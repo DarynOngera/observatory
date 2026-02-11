@@ -1,9 +1,9 @@
-defmodule Observatory.Membrane.SimplePipeline do 
+defmodule Observatory.Membrane.SimplePipeline do
   use Membrane.Pipeline
-  require Membrane.Logger 
+  require Membrane.Logger
 
   alias Membrane.{File, MP4}
-  alias Observatory.ProcessSchema 
+  alias Observatory.ProcessSchema
 
   @impl true
   def handle_init(_ctx, opts) do
@@ -16,7 +16,6 @@ defmodule Observatory.Membrane.SimplePipeline do
     spec = [
       child(:input, %File.Source{location: input_file})
       |> child(:demuxer, MP4.Demuxer.ISOM),
-
       child(:muxer, MP4.Muxer.ISOM)
       |> child(:output, %File.Sink{location: output_file})
     ]
@@ -27,8 +26,12 @@ defmodule Observatory.Membrane.SimplePipeline do
       callback_pid: callback_pid,
       started_at: DateTime.utc_now(),
       stream_count: 0,
-      completed_streams: 0
+      completed_streams: 0,
+      muxer_finished: false,
+      output_finished: false,
+      completion_sent: false
     }
+
     {[spec: spec], state}
   end
 
@@ -48,19 +51,45 @@ defmodule Observatory.Membrane.SimplePipeline do
   end
 
   @impl true
-  def handle_element_end_of_stream(:output, _pad, _ctx, state) do
-    Membrane.Logger.info("Pipeline completed successfully")
-    send_completion_event(state)
-    {[terminate: :normal], state}
+  def handle_element_end_of_stream(:output, pad, _ctx, state) do
+    Membrane.Logger.info("Output sink finished on pad #{inspect(pad)}")
+    new_state = %{state | output_finished: true}
+    maybe_complete(new_state)
   end
 
-  @impl true 
-  def handle_element_end_of_stream(element, _pad, _ctx, state) do
-    completed = state.completed_streams + 1 
-    Membrane.Logger.info("Stream completed: #{inspect(element)}")
-    
+  @impl true
+  def handle_element_end_of_stream(:muxer, pad, _ctx, state) do
+    Membrane.Logger.info("Muxer finished on pad #{inspect(pad)}")
+    new_state = %{state | muxer_finished: true}
+    maybe_complete(new_state)
+  end
+
+  @impl true
+  def handle_element_end_of_stream(:demuxer, pad, _ctx, state) do
+    completed = state.completed_streams + 1
+
+    Membrane.Logger.info(
+      "Demuxer output finished on pad #{inspect(pad)} (#{completed}/#{state.stream_count})"
+    )
+
     {[], %{state | completed_streams: completed}}
-  end 
+  end
+
+  @impl true
+  def handle_element_end_of_stream(element, pad, _ctx, state) do
+    Membrane.Logger.info("Element #{inspect(element)} finished on pad #{inspect(pad)}")
+    {[], state}
+  end
+
+  defp maybe_complete(state) do
+    if state.muxer_finished && state.output_finished && !state.completion_sent do
+      Membrane.Logger.info("All elements finished - completing pipeline")
+      send_completion_event(state)
+      {[terminate: :normal], %{state | completion_sent: true}}
+    else
+      {[], state}
+    end
+  end
 
   defp send_completion_event(state) do
     if state.callback_pid do
@@ -71,11 +100,12 @@ defmodule Observatory.Membrane.SimplePipeline do
         type: :completed,
         message: "Simple pipeline completed",
         data: %{
-          duration_sec: duration
+          duration_sec: duration,
+          pipeline_pid: self()
         }
       }
 
-      send(state.callback_id, {:membrane_event, :completed, event })
+      send(state.callback_pid, {:membrane_event, :completed, event})
     end
   end
 end

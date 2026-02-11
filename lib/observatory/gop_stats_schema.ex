@@ -1,7 +1,7 @@
 defmodule Observatory.GOPStatsSchema do
   @moduledoc """
   GOP (Group of Pictures) analysis results.
-  
+
   Provides frame-level statistics about video structure, particularly:
   - GOP boundaries and sizes
   - Keyframe (I-frame) positions
@@ -32,15 +32,15 @@ defmodule Observatory.GOPStatsSchema do
   defmodule GOP do
     @moduledoc """
     Single GOP (Group of Pictures) information.
-    
+
     A GOP is a sequence of frames between two I-frames (keyframes).
     The first frame is always an I-frame.
 
       
     The compression ratio represents how much the video is compressed:
-  
+
       compression_ratio = uncompressed_size / compressed_size
-  
+
     For YUV 4:2:0 video (most common):
       - Uncompressed size per frame = width * height * 1.5 bytes
       - Y plane: width * height bytes (full resolution)
@@ -92,7 +92,11 @@ defmodule Observatory.GOPStatsSchema do
     Counts frames by type.
     Returns map with :i, :p, :b counts.
     """
-    @spec frame_type_counts(t()) :: %{i: non_neg_integer(), p: non_neg_integer(), b: non_neg_integer()}
+    @spec frame_type_counts(t()) :: %{
+            i: non_neg_integer(),
+            p: non_neg_integer(),
+            b: non_neg_integer()
+          }
     def frame_type_counts(%__MODULE__{structure: structure}) do
       Enum.reduce(structure, %{i: 0, p: 0, b: 0}, fn type, acc ->
         case String.downcase(type) do
@@ -105,11 +109,11 @@ defmodule Observatory.GOPStatsSchema do
     end
 
     @spec compression_ratio_str(t()) :: String.t()
-  def compression_ratio_str(%__MODULE__{compression_ratio: ratio}) when is_float(ratio) do
-    "#{Float.round(ratio, 1)}:1"
-  end
-  
-  def compression_ratio_str(_), do: "N/A"
+    def compression_ratio_str(%__MODULE__{compression_ratio: ratio}) when is_float(ratio) do
+      "#{Float.round(ratio, 1)}:1"
+    end
+
+    def compression_ratio_str(_), do: "N/A"
   end
 
   defmodule AggregateStats do
@@ -150,24 +154,23 @@ defmodule Observatory.GOPStatsSchema do
     gop_sizes = Enum.map(gops, & &1.frame_count)
     avg_gop_size = Enum.sum(gop_sizes) / total_gops
     gop_size_variance = calculate_variance(gop_sizes, avg_gop_size)
-    
-    
+
     gop_durations = Enum.map(gops, & &1.duration_sec)
     avg_gop_duration = Enum.sum(gop_durations) / total_gops
-    
+
     keyframe_interval = avg_gop_duration
-    
+
     all_frames = Enum.flat_map(gops, & &1.structure)
     i_frames = Enum.count(all_frames, &(String.downcase(&1) == "i"))
     b_frames = Enum.count(all_frames, &(String.downcase(&1) == "b"))
-    
+
     i_frame_ratio = if total_frames > 0, do: i_frames / total_frames * 100, else: 0.0
     b_frame_ratio = if total_frames > 0, do: b_frames / total_frames * 100, else: 0.0
-    
+
     # Seekability score (0-100)
     # Lower GOP size + lower variance = higher seekability
     seekability = calculate_seekability_score(avg_gop_size, gop_size_variance)
-    
+
     %AggregateStats{
       total_gops: total_gops,
       avg_gop_size: avg_gop_size,
@@ -193,8 +196,6 @@ defmodule Observatory.GOPStatsSchema do
     }
   end
 
-
-
   defp calculate_variance(values, mean) do
     sum_squared_diff =
       values
@@ -205,14 +206,13 @@ defmodule Observatory.GOPStatsSchema do
   end
 
   defp calculate_seekability_score(avg_gop_size, variance) do
-
     # Perfect score: GOP size = 1 (every frame is a key frame)
     # Good score: GOP size < 30, low variance
     # Poor score: GOP size > 120, high variance
-    
+
     size_penalty = min(avg_gop_size / 120 * 50, 50)
     variance_penalty = min(variance / 100 * 50, 50)
-    
+
     max(100 - size_penalty - variance_penalty, 0.0)
   end
 end

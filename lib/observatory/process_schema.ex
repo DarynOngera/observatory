@@ -1,23 +1,23 @@
-defmodule Observatory.ProcessSchema do 
-   @moduledoc """
+defmodule Observatory.ProcessSchema do
+  @moduledoc """
   Captures the transformation process metadata and events.
-  
+
   Tracks FFmpeg encoding progress, events, and metrics in real-time.
   """
-  
+
   alias __MODULE__.{TransformConfig, ProcessEvent, ProcessStats}
 
   @type t :: %__MODULE__{
-    input_file: String.t(),
-    output_file: String.t(),
-    config: TransformConfig.t(),
-    started_at: DateTime.t(),
-    completed_at: DateTime.t() | nil,
-    status: status(),
-    events: [ProcessEvent.t()],
-    stats: ProcessStats.t() | nil,
-    error: String.t() | nil
-  }
+          input_file: String.t(),
+          output_file: String.t(),
+          config: TransformConfig.t(),
+          started_at: DateTime.t(),
+          completed_at: DateTime.t() | nil,
+          status: status(),
+          events: [ProcessEvent.t()],
+          stats: ProcessStats.t() | nil,
+          error: String.t() | nil
+        }
 
   @type status :: :pending | :running | :completed | :failed
 
@@ -37,19 +37,19 @@ defmodule Observatory.ProcessSchema do
     @moduledoc """
     Configuration for media transformation.
     """
-    
+
     @type t :: %__MODULE__{
-      codec: String.t(),
-      container: String.t(),
-      video_bitrate: pos_integer() | nil,
-      audio_bitrate: pos_integer() | nil,
-      resolution: {pos_integer(), pos_integer()} | nil,
-      frame_rate: {pos_integer(), pos_integer()} | nil,
-      gop_size: pos_integer() | nil,
-      preset: atom() | String.t() | nil,
-      crf: pos_integer() | nil,
-      extra_params: map()
-    }
+            codec: String.t(),
+            container: String.t(),
+            video_bitrate: pos_integer() | nil,
+            audio_bitrate: pos_integer() | nil,
+            resolution: {pos_integer(), pos_integer()} | nil,
+            frame_rate: {pos_integer(), pos_integer()} | nil,
+            gop_size: pos_integer() | nil,
+            preset: atom() | String.t() | nil,
+            crf: pos_integer() | nil,
+            extra_params: map()
+          }
 
     defstruct [
       :codec,
@@ -71,13 +71,13 @@ defmodule Observatory.ProcessSchema do
     """
 
     @type event_type :: :started | :progress | :warning | :error | :completed
-    
+
     @type t :: %__MODULE__{
-      timestamp: DateTime.t(),
-      type: event_type(),
-      message: String.t(),
-      data: map()
-     }
+            timestamp: DateTime.t(),
+            type: event_type(),
+            message: String.t(),
+            data: map()
+          }
 
     defstruct [
       :timestamp,
@@ -93,14 +93,14 @@ defmodule Observatory.ProcessSchema do
     """
 
     @type t :: %__MODULE__{
-      duration_sec: float(),
-      frames_processed: non_neg_integer(),
-      fps: float(),
-      bitrate_kbps: float(),
-      speed: float(),
-      size_bytes: non_neg_integer(),
-      quality_score: float() | nil
-     }
+            duration_sec: float(),
+            frames_processed: non_neg_integer(),
+            fps: float(),
+            bitrate_kbps: float(),
+            speed: float(),
+            size_bytes: non_neg_integer(),
+            quality_score: float() | nil
+          }
 
     defstruct [
       :duration_sec,

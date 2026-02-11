@@ -15,7 +15,8 @@ defmodule Observatory.GOPAnalyzer do
     with :ok <- validate_file_exists(file_path),
          {:ok, media_schema} <- Introspector.analyze(file_path, opts),
          {:ok, json_output} <- run_ffprobe(file_path, stream_index, opts),
-         {:ok, gop_stats} <- parse_with_dimensions(json_output, file_path, stream_index, media_schema) do
+         {:ok, gop_stats} <-
+           parse_with_dimensions(json_output, file_path, stream_index, media_schema) do
       {:ok, gop_stats}
     end
   end
@@ -24,18 +25,19 @@ defmodule Observatory.GOPAnalyzer do
 
   defp parse_with_dimensions(json_output, file_path, stream_index, media_schema) do
     # Get video stream dimensions
-    video_stream = 
+    video_stream =
       media_schema.streams
       |> Enum.find(&(&1.type == :video && &1.index == stream_index))
-    
-    dimensions = 
+
+    dimensions =
       case video_stream do
         %{width: w, height: h} when is_integer(w) and is_integer(h) ->
           {w, h}
+
         _ ->
           nil
       end
-    
+
     FrameParser.parse(json_output, file_path, stream_index, dimensions)
   end
 
@@ -49,9 +51,10 @@ defmodule Observatory.GOPAnalyzer do
 
   defp run_ffprobe(file_path, stream_index, opts) do
     ffprobe_cmd = Keyword.get(opts, :ffprobe_path, @ffprobe_cmd)
-    
-    args = @ffprobe_args ++ 
-           ["-select_streams", "v:#{stream_index}", file_path]
+
+    args =
+      @ffprobe_args ++
+        ["-select_streams", "v:#{stream_index}", file_path]
 
     case System.cmd(ffprobe_cmd, args, stderr_to_stdout: true) do
       {output, 0} ->

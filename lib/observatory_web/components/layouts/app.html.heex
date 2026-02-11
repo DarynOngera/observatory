@@ -1,0 +1,55 @@
+<header class="header">
+  <div class="container">
+    <div class="header-content">
+      <div class="logo">
+        <div class="logo-dot"></div>
+        <h1 class="logo-text">
+          <span>&gt;</span> OBSERVATORY
+        </h1>
+        <span class="logo-version">[v1.0.0]</span>
+      </div>
+      
+      <nav class="nav">
+        <.link
+          navigate={~p"/"}
+          class={"nav-link #{if @current_path == ~p"/", do: "active", else: ""}"}
+        >
+          [HOME]
+        </.link>
+        <.link
+          navigate={~p"/analyze"}
+          class={"nav-link #{if @current_path == ~p"/analyze", do: "active", else: ""}"}
+        >
+          [ANALYZE]
+        </.link>
+        <.link
+          navigate={~p"/gop"}
+          class={"nav-link #{if @current_path == ~p"/gop", do: "active", else: ""}"}
+        >
+          [GOP]
+        </.link>
+      </nav>
+      
+      <div class="status">
+        <span class="status-dot"></span>
+        <span>[SYSTEM ONLINE]</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="main">
+  <div class="container">
+    <.flash_group flash={@flash} />
+    <%= @inner_content %>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-content">
+      <span>[MEDIA INTELLIGENCE PLATFORM]</span>
+      <span>[<%= DateTime.utc_now() |> Calendar.strftime("%Y-%m-%d %H:%M:%S UTC") %>]</span>
+    </div>
+  </div>
+</footer>
