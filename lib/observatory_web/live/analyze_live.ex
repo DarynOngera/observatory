@@ -263,16 +263,14 @@ defmodule ObservatoryWeb.AnalyzeLive do
       <!-- Upload Section (when no file analyzed) -->
       <%= if !@media_schema && !@loading do %>
         <div class="card p-8">
-          <!-- Debug info -->
-          <div class="mb-4 p-2 bg-gray-900 text-xs font-mono">
-            <div>Entries: <%= length(@uploads.file.entries) %></div>
-            <div>Upload ref: <%= @uploads.file.ref %></div>
-          </div>
-          
           <form id="upload-form" phx-submit="analyze" phx-change="validate">
             <%= if @uploads.file.entries == [] do %>
-              <label class="upload-zone" phx-drop-target={@uploads.file.ref}>
-                <.live_file_input upload={@uploads.file} />
+              <label 
+                for={@uploads.file.ref}
+                class="upload-zone" 
+                phx-drop-target={@uploads.file.ref}
+              >
+                <.live_file_input upload={@uploads.file} class="hidden" />
 
                 <div>
                   <div class="upload-icon">[F]</div>
