@@ -8,17 +8,17 @@ defmodule ObservatoryWeb.FileUploadComponent do
   def render(assigns) do
     ~H"""
     <div>
-      <!-- Upload Zone -->
-      <div
+      <!-- Upload Zone - uses label to trigger file input -->
+      <label
+        for={@uploads.file.ref}
         class={if @drag_active, do: "upload-zone drag-active", else: "upload-zone"}
         phx-drop-target={@uploads.file.ref}
         phx-hook="DragAndDrop"
         id="upload-zone"
-        phx-click={JS.dispatch("click", to: "#upload-zone input[type=file]")}
       >
         <.live_file_input upload={@uploads.file} class="hidden" />
 
-        <div style="pointer-events: none;">
+        <div>
           <div class="upload-icon">+</div>
           <p class="upload-text">
             DROP VIDEO FILE
@@ -26,43 +26,46 @@ defmodule ObservatoryWeb.FileUploadComponent do
           <p class="upload-subtext">
             or click to browse
           </p>
-          <p class="upload-subtext" style="margin-top: 16px;">
+          <p class="upload-subtext mt-4">
             MP4, MOV, MKV, AVI up to 500MB
           </p>
         </div>
-      </div>
+      </label>
 
       <!-- Selected File Info -->
       <%= for entry <- @uploads.file.entries do %>
-        <div class="card" style="margin-top: 24px;">
-          <div style="display: flex; align-items: center; justify-content: space-between;">
-            <div style="display: flex; align-items: center; gap: 12px;">
-              <div style="width: 40px; height: 40px; border: 2px solid #00ff00; display: flex; align-items: center; justify-content: center;">
+        <div class="card mt-6">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <div class="w-12 h-12 border flex items-center justify-center">
                 <span class="font-mono">[F]</span>
               </div>
               <div>
-                <p style="font-size: 14px; font-weight: bold; color: #00ff00; font-family: monospace;">
+                <p class="font-mono text-sm text-green font-bold">
                   <%= entry.client_name %>
                 </p>
-                <p style="font-size: 12px; color: #666666; font-family: monospace;">
+                <p class="font-mono text-xs text-gray">
                   <%= format_bytes(entry.client_size) %>
                 </p>
               </div>
             </div>
 
-            <div style="display: flex; align-items: center; gap: 12px;">
+            <div class="flex items-center gap-3">
               <!-- Progress -->
               <%= if entry.progress < 100 do %>
-                <div style="width: 128px;">
-                  <div style="border: 2px solid #00ff00; overflow: hidden; height: 8px;">
-                    <div style={"background: #00ff00; height: 100%; transition: width 0.3s ease; width: #{entry.progress}%;"}></div>
+                <div class="w-32">
+                  <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                    <div 
+                      class="bg-green h-full transition-all duration-300"
+                      style={"width: #{entry.progress}%"}
+                    ></div>
                   </div>
                 </div>
-                <span style="font-family: monospace; font-size: 12px; color: #00ff00; width: 48px; text-align: right;">
+                <span class="font-mono text-xs text-green w-12 text-right">
                   <%= entry.progress %>%
                 </span>
               <% else %>
-                <span style="font-family: monospace; font-size: 12px; color: #00ff00;">READY</span>
+                <span class="font-mono text-xs text-green">READY</span>
               <% end %>
 
               <!-- Cancel button -->
@@ -71,8 +74,7 @@ defmodule ObservatoryWeb.FileUploadComponent do
                 phx-click="cancel-upload"
                 phx-target={@myself}
                 phx-value-ref={entry.ref}
-                class="btn btn-secondary"
-                style="padding: 4px 8px; font-size: 12px;"
+                class="btn btn-secondary text-xs px-2 py-1"
               >
                 X
               </button>
@@ -81,7 +83,7 @@ defmodule ObservatoryWeb.FileUploadComponent do
 
           <!-- Errors -->
           <%= for err <- upload_errors(@uploads.file, entry) do %>
-            <div class="flash flash-error" style="margin-top: 16px;">
+            <div class="flash flash-error mt-4">
               ERROR: <%= error_to_string(err) %>
             </div>
           <% end %>
@@ -90,7 +92,7 @@ defmodule ObservatoryWeb.FileUploadComponent do
 
       <!-- Upload Button -->
       <%= if length(@uploads.file.entries) > 0 && Enum.all?(@uploads.file.entries, &(&1.progress == 100)) do %>
-        <div style="margin-top: 24px; text-align: center;">
+        <div class="mt-6 text-center">
           <button
             type="button"
             phx-click={@on_analyze}

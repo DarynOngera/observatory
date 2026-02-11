@@ -1,66 +1,15 @@
 defmodule ObservatoryWeb.HomeLive do
   @moduledoc """
-  Home page with upload functionality.
+  Home page - landing page with navigation to analysis tools.
   """
   use ObservatoryWeb, :live_view
-
-  alias ObservatoryWeb.FileUploadComponent
 
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
      socket
      |> assign(:current_path, ~p"/")
-     |> assign(:page_title, "Home")
-     |> assign(:uploaded_file, nil)
-     |> assign(:drag_active, false)
-     |> allow_upload(:file,
-       accept: ~w(.mp4 .mov .mkv .avi .webm),
-       max_entries: 1,
-       max_file_size: 500_000_000
-     )}
-  end
-
-  @impl true
-  def handle_event("analyze-media", _params, socket) do
-    case consume_uploaded_entries(socket, :file, fn %{path: path}, entry ->
-           {:ok, %{path: path, name: entry.client_name, size: entry.client_size}}
-         end) do
-      [%{path: path} = file_info] ->
-        {:noreply,
-         socket
-         |> assign(:uploaded_file, file_info)
-         |> push_navigate(to: ~p"/analyze?file=#{URI.encode_www_form(path)}")}
-
-      _ ->
-        {:noreply, put_flash(socket, :error, "No file uploaded")}
-    end
-  end
-
-  @impl true
-  def handle_event("analyze-gop", _params, socket) do
-    case consume_uploaded_entries(socket, :file, fn %{path: path}, entry ->
-           {:ok, %{path: path, name: entry.client_name, size: entry.client_size}}
-         end) do
-      [%{path: path} = file_info] ->
-        {:noreply,
-         socket
-         |> assign(:uploaded_file, file_info)
-         |> push_navigate(to: ~p"/gop?file=#{URI.encode_www_form(path)}")}
-
-      _ ->
-        {:noreply, put_flash(socket, :error, "No file uploaded")}
-    end
-  end
-
-  @impl true
-  def handle_event("drag-active", _params, socket) do
-    {:noreply, assign(socket, :drag_active, true)}
-  end
-
-  @impl true
-  def handle_event("drag-inactive", _params, socket) do
-    {:noreply, assign(socket, :drag_active, false)}
+     |> assign(:page_title, "Home")}
   end
 
   @impl true
@@ -81,22 +30,6 @@ defmodule ObservatoryWeb.HomeLive do
           Advanced video inspection and GOP structure analysis.<br>
           Upload your media files for comprehensive technical analysis.
         </p>
-      </div>
-
-      <!-- Upload Section -->
-      <div class="max-w-2xl mx-auto">
-        <div class="section-header text-center mb-8">
-          <span class="section-title">UPLOAD VIDEO</span>
-        </div>
-
-        <.live_component
-          module={FileUploadComponent}
-          id="home-upload"
-          uploads={@uploads}
-          drag_active={@drag_active}
-          action_label="START ANALYSIS"
-          on_analyze="analyze-media"
-        />
       </div>
 
       <!-- Quick Actions -->

@@ -1,10 +1,11 @@
 defmodule ObservatoryWeb.GopLive do
   @moduledoc """
-  GOP analysis LiveView with terminal-styled output.
+  GOP analysis LiveView with terminal-styled output and proper file upload handling.
   """
   use ObservatoryWeb, :live_view
 
   alias Observatory.GOPAnalyzer
+  require Logger
 
   @impl true
   def mount(params, _session, socket) do
@@ -19,37 +20,96 @@ defmodule ObservatoryWeb.GopLive do
       |> assign(:loading, false)
       |> assign(:error, nil)
       |> allow_upload(:file,
-        accept: ~w(.mp4 .mov .mkv .avi .webm),
+        accept: :any,
         max_entries: 1,
-        max_file_size: 500_000_000
+        max_file_size: 500_000_000,
+        auto_upload: true,
+        progress: &handle_progress/3
       )
 
     # Auto-analyze if file path provided
     socket =
       if file_path && File.exists?(file_path) do
+        Logger.info("Auto-analyzing GOP for file: #{file_path}")
         analyze_file(socket, file_path)
       else
-        socket
+        if file_path do
+          Logger.warning("GOP: File path provided but does not exist: #{file_path}")
+          put_flash(socket, :error, "File not found: #{file_path}")
+        else
+          socket
+        end
       end
 
     {:ok, socket}
   end
 
   @impl true
-  def handle_event("analyze", _params, socket) do
-    case consume_uploaded_entries(socket, :file, fn %{path: path}, _entry ->
-           {:ok, path}
-         end) do
-      [path] ->
-        {:noreply, analyze_file(socket, path)}
+  def handle_event("validate", params, socket) do
+    Logger.debug("GOP: File upload validation triggered: #{inspect(params)}")
 
-      _ ->
+    # Check for upload errors
+    socket =
+      Enum.reduce(socket.assigns.uploads.file.entries, socket, fn entry, acc_socket ->
+        errors = upload_errors(socket.assigns.uploads.file, entry)
+
+        Enum.reduce(errors, acc_socket, fn error, s ->
+          Logger.warning("GOP: Upload validation error: #{inspect(error)}")
+          put_flash(s, :error, error_to_string(error))
+        end)
+      end)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("analyze", _params, socket) do
+    Logger.info("GOP: Analyze button clicked")
+
+    uploaded_files =
+      consume_uploaded_entries(socket, :file, fn %{path: path}, entry ->
+        Logger.info("GOP: Processing upload: #{entry.client_name}")
+
+        # Create persistent copy
+        dest = Path.join([System.tmp_dir!(), "observatory", entry.client_name])
+        File.mkdir_p!(Path.dirname(dest))
+
+        case File.cp(path, dest) do
+          :ok ->
+            Logger.info("GOP: File copied to: #{dest}")
+            {:ok, dest}
+
+          {:error, reason} ->
+            Logger.error("GOP: Failed to copy file: #{inspect(reason)}")
+            {:postpone, reason}
+        end
+      end)
+
+    case uploaded_files do
+      [file_path] when is_binary(file_path) ->
+        Logger.info("GOP: Starting analysis for: #{file_path}")
+        {:noreply, analyze_file(socket, file_path)}
+
+      [] ->
+        Logger.warning("GOP: No files were consumed")
         {:noreply, put_flash(socket, :error, "Please upload a file first")}
+
+      error ->
+        Logger.error("GOP: Upload consumption failed: #{inspect(error)}")
+        {:noreply, put_flash(socket, :error, "Failed to process upload")}
     end
   end
 
   @impl true
+  def handle_event("cancel-upload", %{"ref" => ref}, socket) do
+    Logger.info("GOP: Canceling upload: #{ref}")
+    {:noreply, cancel_upload(socket, :file, ref)}
+  end
+
+  @impl true
   def handle_event("clear", _params, socket) do
+    Logger.info("GOP: Clearing analysis")
+
     {:noreply,
      socket
      |> assign(:gop_stats, nil)
@@ -57,44 +117,96 @@ defmodule ObservatoryWeb.GopLive do
      |> assign(:error, nil)}
   end
 
+  defp handle_progress(:file, entry, socket) do
+    Logger.debug("GOP: Upload progress: #{entry.client_name} - #{entry.progress}%")
+
+    if entry.done? do
+      Logger.info("GOP: Upload complete: #{entry.client_name}")
+    end
+
+    {:noreply, socket}
+  end
+
   defp analyze_file(socket, path) do
+    Logger.info("GOP: Starting file analysis: #{path}")
+    Logger.info("GOP: File exists? #{File.exists?(path)}")
+
     socket
     |> assign(:loading, true)
     |> assign(:error, nil)
+    |> assign(:file_path, path)
     |> start_async(:analysis, fn ->
-      case GOPAnalyzer.analyze(path) do
-        {:ok, stats} -> {:ok, stats}
-        {:error, reason} -> {:error, reason}
-      end
+      Logger.info("GOP: Async analysis started for: #{path}")
+
+      result =
+        case GOPAnalyzer.analyze(path) do
+          {:ok, stats} ->
+            Logger.info("GOP: Analysis successful!")
+            {:ok, stats}
+
+          {:error, reason} = error ->
+            Logger.error("GOP: Analysis failed: #{inspect(reason)}")
+            error
+        end
+
+      result
     end)
   end
 
   @impl true
   def handle_async(:analysis, {:ok, {:ok, stats}}, socket) do
+    Logger.info("GOP: Analysis completed successfully")
+
     {:noreply,
      socket
      |> assign(:loading, false)
-     |> assign(:gop_stats, stats)}
+     |> assign(:gop_stats, stats)
+     |> put_flash(:info, "GOP analysis completed")}
   end
 
   @impl true
   def handle_async(:analysis, {:ok, {:error, reason}}, socket) do
+    Logger.error("GOP: Analysis failed: #{inspect(reason)}")
+
+    error_msg =
+      case reason do
+        :file_not_found -> "File not found"
+        {:ffprobe_failed, output} -> "FFprobe failed: #{String.slice(output, 0, 200)}"
+        {:ffprobe_not_found, _} -> "FFprobe not found. Install FFmpeg."
+        :no_frames -> "No frames found in video"
+        other -> "GOP analysis error: #{inspect(other)}"
+      end
+
     {:noreply,
      socket
      |> assign(:loading, false)
-     |> assign(:error, inspect(reason))}
+     |> assign(:error, error_msg)
+     |> put_flash(:error, error_msg)}
   end
 
   @impl true
   def handle_async(:analysis, {:exit, reason}, socket) do
+    Logger.error("GOP: Analysis process exited: #{inspect(reason)}")
+
     {:noreply,
      socket
      |> assign(:loading, false)
-     |> assign(:error, "GOP Analysis failed: #{inspect(reason)}")}
+     |> assign(:error, "Analysis failed: #{inspect(reason)}")
+     |> put_flash(:error, "GOP analysis process failed")}
   end
 
   defp decode_file_param(nil), do: nil
-  defp decode_file_param(path), do: URI.decode_www_form(path)
+
+  defp decode_file_param(path) when is_binary(path) do
+    decoded = URI.decode_www_form(path)
+
+    if File.exists?(decoded) do
+      decoded
+    else
+      Logger.warning("GOP: Decoded file does not exist: #{decoded}")
+      nil
+    end
+  end
 
   @impl true
   def render(assigns) do
@@ -119,29 +231,74 @@ defmodule ObservatoryWeb.GopLive do
       <!-- Upload Section (when no file analyzed) -->
       <%= if !@gop_stats && !@loading do %>
         <div class="card p-8">
-          <form phx-submit="analyze" phx-change="validate">
-            <div class="upload-zone" phx-drop-target={@uploads.file.ref}>
-              <.live_file_input upload={@uploads.file} class="hidden" />
-
-              <div class="pointer-events-none">
-                <div class="upload-icon">[G]</div>
-                <p class="upload-text">
-                  DROP VIDEO FOR GOP ANALYSIS
-                </p>
-                <p class="upload-subtext">
-                  Analyze I/P/B frame structure
-                </p>
-              </div>
-            </div>
-
-            <%= for entry <- @uploads.file.entries do %>
-              <div class="card mt-6 p-4 flex justify-between items-center">
-                <div class="flex items-center gap-3">
-                  <span class="text-green">[G]</span>
-                  <span class="font-mono text-sm"><%= entry.client_name %></span>
-                  <span class="text-xs text-gray">(<%= format_bytes(entry.client_size) %>)</span>
+          <form id="upload-form" phx-submit="analyze" phx-change="validate">
+            <.live_file_input upload={@uploads.file} class="hidden" />
+            
+            <%= if @uploads.file.entries == [] do %>
+              <label 
+                for={@uploads.file.ref}
+                class="upload-zone" 
+                phx-drop-target={@uploads.file.ref}
+              >
+                <div>
+                  <div class="upload-icon">[G]</div>
+                  <p class="upload-text">
+                    DROP VIDEO FILE FOR GOP ANALYSIS
+                  </p>
+                  <p class="upload-subtext">
+                    or click to browse
+                  </p>
                 </div>
+              </label>
+            <% else %>
+              <%= for entry <- @uploads.file.entries do %>
+                <div class="card mt-6 p-4">
+                  <div class="flex justify-between items-center mb-3">
+                    <div class="flex items-center gap-3">
+                      <span class="text-green">[F]</span>
+                      <span class="font-mono text-sm"><%= entry.client_name %></span>
+                      <span class="text-xs text-gray">(<%= format_bytes(entry.client_size) %>)</span>
+                    </div>
 
+                    <button
+                      type="button"
+                      phx-click="cancel-upload"
+                      phx-value-ref={entry.ref}
+                      class="btn btn-secondary"
+                      style="padding: 4px 8px; font-size: 12px;"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  
+                  <%= if entry.progress < 100 do %>
+                    <div class="flex items-center gap-3">
+                      <div class="w-full">
+                        <div class="border" style="height: 8px; overflow: hidden;">
+                          <div
+                            class="bg-green h-full transition-all"
+                            style={"width: #{entry.progress}%;"}
+                          >
+                          </div>
+                        </div>
+                      </div>
+                      <span class="font-mono text-xs text-green w-16 text-right">
+                        <%= entry.progress %>%
+                      </span>
+                    </div>
+                  <% end %>
+
+                  <%= for err <- upload_errors(@uploads.file, entry) do %>
+                    <div class="flash flash-error mt-4">
+                      <span class="font-bold">[ERROR]</span>
+                      <%= error_to_string(err) %>
+                    </div>
+                  <% end %>
+                </div>
+              <% end %>
+              
+              <!-- Always show analyze button when entries exist -->
+              <div class="mt-6 text-center">
                 <button type="submit" class="btn" disabled={@loading}>
                   <%= if @loading, do: "ANALYZING...", else: "ANALYZE GOP" %>
                 </button>
@@ -167,179 +324,135 @@ defmodule ObservatoryWeb.GopLive do
         <div class="flash flash-error">
           <div class="flex items-center gap-2 mb-2">
             <span class="text-red font-bold">[X]</span>
-            <span class="font-mono text-sm text-red font-semibold">GOP ANALYSIS ERROR</span>
+            <span class="font-mono text-sm text-red font-semibold">ANALYSIS ERROR</span>
           </div>
           <p class="font-mono text-xs"><%= @error %></p>
         </div>
       <% end %>
 
-      <%!-- Results --%>
+      <!-- Results -->
       <%= if @gop_stats do %>
-        <div style="display: flex; flex-direction: column; gap: 24px;">
-          <%!-- Summary Stats --%>
-          <div style="background: #111111; border: 1px solid #2a2a2a; border-radius: 8px; padding: 24px; transition: border-color 0.2s ease;">
-            <div style="border-bottom: 1px solid #2a2a2a; padding-bottom: 8px; margin-bottom: 24px;">
-              <span style="color: #00ff88; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; font-family: 'JetBrains Mono', monospace;">GOP STATISTICS</span>
+        <div class="space-y-lg">
+          <!-- Summary Stats -->
+          <div class="card p-6">
+            <div class="section-header">
+              <span class="section-title">GOP STATISTICS</span>
             </div>
 
-            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
-              <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a;">
-                <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px;">TOTAL FRAMES</div>
-                <div style="font-size: 24px; color: #00ff88; font-family: 'JetBrains Mono', monospace; font-weight: 700;" style="font-weight: 700;">
-                  <%= @gop_stats.total_frames %>
-                </div>
-              </div>
-
-              <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a;">
-                <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px;">TOTAL GOPS</div>
-                <div style="font-size: 24px; color: #00ff88; font-family: 'JetBrains Mono', monospace; font-weight: 700;" style="font-weight: 700;">
+            <div class="grid grid-cols-4 gap-4">
+              <div class="card p-4">
+                <div class="text-xs text-gray mb-1">TOTAL GOPS</div>
+                <div class="text-green font-mono text-2xl font-bold">
                   <%= @gop_stats.stats.total_gops %>
                 </div>
               </div>
 
-              <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a;">
-                <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px;">AVG GOP SIZE</div>
-                <div style="font-size: 24px; color: #00ff88; font-family: 'JetBrains Mono', monospace; font-weight: 700;" style="font-weight: 700;">
-                  <%= Float.round(@gop_stats.stats.avg_gop_size, 1) %>
-                </div>
-                <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace;">frames</div>
-              </div>
-
-              <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a;">
-                <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px;">SEEKABILITY</div>
-                <div style="font-size: 24px; color: #00ff88; font-family: 'JetBrains Mono', monospace; font-weight: 700;" style="font-weight: 700;">
-                  <%= Float.round(@gop_stats.stats.seekability_score, 1) %>
-                </div>
-                <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace;">/100</div>
-              </div>
-            </div>
-
-            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 16px;">
-              <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a;">
-                <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px;">MIN GOP</div>
-                <div style="font-size: 18px; font-family: 'JetBrains Mono', monospace;" style="color: #e0e0e0;">
-                  <%= @gop_stats.stats.min_gop_size %> frames
+              <div class="card p-4">
+                <div class="text-xs text-gray mb-1">AVG GOP SIZE</div>
+                <div class="text-green font-mono text-2xl font-bold">
+                  <%= Float.round(@gop_stats.stats.avg_gop_size, 1) %> frames
                 </div>
               </div>
 
-              <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a;">
-                <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px;">MAX GOP</div>
-                <div style="font-size: 18px; font-family: 'JetBrains Mono', monospace;" style="color: #e0e0e0;">
-                  <%= @gop_stats.stats.max_gop_size %> frames
+              <div class="card p-4">
+                <div class="text-xs text-gray mb-1">AVG GOP DURATION</div>
+                <div class="text-green font-mono text-2xl font-bold">
+                  <%= Float.round(@gop_stats.stats.avg_gop_duration_sec, 2) %>s
                 </div>
               </div>
 
-              <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a;">
-                <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px;">RESOLUTION</div>
-                <div style="font-size: 18px; font-family: 'JetBrains Mono', monospace;" style="color: #e0e0e0;">
-                  <%= format_dimensions(@gop_stats.width, @gop_stats.height) %>
-                </div>
-              </div>
-
-              <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a;">
-                <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 4px;">PIXEL FORMAT</div>
-                <div style="font-size: 18px; font-family: 'JetBrains Mono', monospace;" style="color: #e0e0e0;">
-                  <%= @gop_stats.pixel_format || "N/A" %>
+              <div class="card p-4">
+                <div class="text-xs text-gray mb-1">SEEKABILITY SCORE</div>
+                <div class="text-green font-mono text-2xl font-bold">
+                  <%= Float.round(@gop_stats.stats.seekability_score, 1) %>/100
                 </div>
               </div>
             </div>
           </div>
 
-          <%!-- GOP Distribution Chart --%>
-          <%= if length(@gop_stats.gops) > 0 do %>
-            <div style="background: #111111; border: 1px solid #2a2a2a; border-radius: 8px; padding: 24px; transition: border-color 0.2s ease;">
-              <div style="border-bottom: 1px solid #2a2a2a; padding-bottom: 8px; margin-bottom: 24px;">
-                <span style="color: #00ff88; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; font-family: 'JetBrains Mono', monospace;">GOP DISTRIBUTION</span>
+          <!-- Frame Distribution -->
+          <div class="card p-6">
+            <div class="section-header">
+              <span class="section-title">FRAME DISTRIBUTION</span>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4">
+              <div class="card p-4 text-center">
+                <div class="text-xs text-gray mb-2">I-FRAMES (KEY)</div>
+                <div class="text-green font-mono text-3xl font-bold">
+                  <%= @gop_stats.stats.i_frame_ratio |> Float.round(1) %>%
+                </div>
+                <div class="text-xs text-gray mt-1">
+                  <%= @gop_stats.total_frames %> total frames
+                </div>
               </div>
 
-              <div style="display: flex; flex-direction: column; gap: 24px;">
-                <%= for {gop, index} <- Enum.take(@gop_stats.gops, 50) |> Enum.with_index() do %>
-                  <div style="display: flex; align-items: center; gap: 12px; font-size: 12px; font-family: 'JetBrains Mono', monospace;">
-                    <span style="color: #555555;" style="width: 32px; text-align: right;"><%= index + 1 %></span>
-                    <div style="flex: 1; background: #1a1a1a; border-radius: 2px; overflow: hidden; position: relative; height: 24px;">
-                      <div
-                        style={"height: 100%; background: #00ff88; transition: width 0.5s ease; width: #{gop_size_percentage(gop.size, @gop_stats.stats.max_gop_size)}%; box-shadow: 0 0 10px rgba(0, 255, 136, 0.3);"}
-                      >
-                      </div>
-                      <span style="position: absolute; inset: 0; display: flex; align-items: center; padding: 0 8px; color: #e0e0e0;">
-                        <%= if gop.idr? do %>
-                          <span style="color: #00ff88; margin-right: 8px;">[IDR]</span>
-                        <% end %>
-                        <%= gop.size %> frames
+              <div class="card p-4 text-center">
+                <div class="text-xs text-gray mb-2">P-FRAMES</div>
+                <div class="text-blue font-mono text-3xl font-bold">
+                  <%= (100 - @gop_stats.stats.i_frame_ratio - @gop_stats.stats.b_frame_ratio) |> Float.round(1) %>%
+                </div>
+              </div>
+
+              <div class="card p-4 text-center">
+                <div class="text-xs text-gray mb-2">B-FRAMES</div>
+                <div class="text-yellow font-mono text-3xl font-bold">
+                  <%= @gop_stats.stats.b_frame_ratio |> Float.round(1) %>%
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- GOP List -->
+          <div class="card p-6">
+            <div class="section-header">
+              <span class="section-title">GOP BREAKDOWN (<%= length(@gop_stats.gops) %>)</span>
+            </div>
+
+            <div class="space-y">
+              <%= for {gop, index} <- Enum.with_index(@gop_stats.gops) do %>
+                <div class="card p-4">
+                  <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center gap-4">
+                      <span class="text-green font-mono font-bold">GOP #<%= index + 1 %></span>
+                      <span class="badge-video"><%= gop.frame_count %> FRAMES</span>
+                    </div>
+                    <div class="text-xs text-gray font-mono">
+                      <%= gop.start_pts_sec |> Float.round(3) %>s - <%= gop.end_pts_sec |> Float.round(3) %>s
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-4 gap-4 font-mono text-xs">
+                    <div>
+                      <span class="text-gray">DURATION:</span>
+                      <span class="text-green"><%= Float.round(gop.duration_sec, 3) %>s</span>
+                    </div>
+                    <div>
+                      <span class="text-gray">I-FRAME SIZE:</span>
+                      <span class="text-green"><%= format_bytes(gop.i_frame_bytes) %></span>
+                    </div>
+                    <div>
+                      <span class="text-gray">TOTAL SIZE:</span>
+                      <span class="text-green"><%= format_bytes(gop.total_bytes) %></span>
+                    </div>
+                    <div>
+                      <span class="text-gray">COMPRESSION:</span>
+                      <span class="text-green">
+                        <%= if gop.compression_ratio, do: "#{Float.round(gop.compression_ratio, 1)}:1", else: "N/A" %>
                       </span>
                     </div>
-                    <span style="color: #888888;" style="width: 80px; text-align: right;">
-                      @<%= gop.start_pts %>
-                    </span>
                   </div>
-                <% end %>
 
-                <%= if length(@gop_stats.gops) > 50 do %>
-                  <div style="text-align: center; padding: 16px 0; font-size: 14px; color: #555555; font-family: 'JetBrains Mono', monospace;">
-                    ... and <%= length(@gop_stats.gops) - 50 %> more GOPs
+                  <div class="mt-3 pt-3 border-t">
+                    <div class="text-xs text-gray mb-2">STRUCTURE:</div>
+                    <div class="font-mono text-xs break-all">
+                      <%= gop.structure |> Enum.take(20) |> Enum.join(" ") %>
+                      <%= if length(gop.structure) > 20, do: " ...", else: "" %>
+                    </div>
                   </div>
-                <% end %>
-              </div>
+                </div>
+              <% end %>
             </div>
-          <% end %>
-
-          <%!-- Frame Type Breakdown --%>
-          <%= if length(@gop_stats.gops) > 0 do %>
-            <div style="background: #111111; border: 1px solid #2a2a2a; border-radius: 8px; padding: 24px; transition: border-color 0.2s ease;">
-              <div style="border-bottom: 1px solid #2a2a2a; padding-bottom: 8px; margin-bottom: 24px;">
-                <span style="color: #00ff88; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; font-family: 'JetBrains Mono', monospace;">FRAME TYPE ANALYSIS</span>
-              </div>
-
-              <% frame_counts = count_frame_types(@gop_stats.gops) %>
-
-              <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px;">
-                <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a; text-align: center;">
-                  <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 8px;">I-FRAMES (IDR)</div>
-                  <div style="font-size: 30px; color: #00ff88; font-family: 'JetBrains Mono', monospace; font-weight: 700;" style="font-weight: 700;">
-                    <%= frame_counts.i_frames %>
-                  </div>
-                  <div style="font-size: 12px; color: #00ff88; font-family: 'JetBrains Mono', monospace; margin-top: 4px;">key frames</div>
-                </div>
-
-                <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a; text-align: center;">
-                  <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 8px;">P-FRAMES</div>
-                  <div style="font-size: 30px; font-family: 'JetBrains Mono', monospace; font-weight: 700;" style="font-weight: 700; color: #4488ff;">
-                    <%= frame_counts.p_frames %>
-                  </div>
-                  <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; margin-top: 4px;" style="color: #4488ff;">predicted</div>
-                </div>
-
-                <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a; text-align: center;">
-                  <div style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace; margin-bottom: 8px;">B-FRAMES</div>
-                  <div style="font-size: 30px; font-family: 'JetBrains Mono', monospace; font-weight: 700;" style="font-weight: 700; color: #ffaa00;">
-                    <%= frame_counts.b_frames %>
-                  </div>
-                  <div style="font-size: 12px; font-family: 'JetBrains Mono', monospace; margin-top: 4px;" style="color: #ffaa00;">bi-directional</div>
-                </div>
-              </div>
-
-              <div style="padding: 16px;" style="background: #111111; border-radius: 4px; border: 1px solid #2a2a2a;">
-                <div style="display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-family: 'JetBrains Mono', monospace;">
-                  <span style="color: #888888;">Total Frames Processed:</span>
-                  <span style="color: #e0e0e0;"><%= frame_counts.i_frames + frame_counts.p_frames + frame_counts.b_frames %></span>
-                </div>
-              </div>
-            </div>
-          <% end %>
-
-          <%!-- Raw Data Toggle --%>
-          <div style="background: #111111; border: 1px solid #2a2a2a; border-radius: 8px; padding: 24px; transition: border-color 0.2s ease;">
-            <details>
-              <summary style="display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;">
-                <span style="font-size: 14px; color: #888888; font-family: 'JetBrains Mono', monospace;" style="transition: color 0.2s ease;" onmouseover="this.style.color='#00ff88'" onmouseout="this.style.color='#888888'">
-                  > SHOW RAW GOP DATA
-                </span>
-                <span style="font-size: 12px; color: #555555; font-family: 'JetBrains Mono', monospace;">[+]</span>
-              </summary>
-              <div style="margin-top: 16px; background: #111111; border-left: 3px solid #00ff88; padding: 16px; font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.6;" style="border-radius: 4px; overflow-x: auto;">
-                <pre style="font-size: 12px; color: #888888; margin: 0;"><%= inspect(@gop_stats, pretty: true, limit: 100) %></pre>
-              </div>
-            </details>
           </div>
         </div>
       <% end %>
@@ -347,26 +460,13 @@ defmodule ObservatoryWeb.GopLive do
     """
   end
 
+  defp format_bytes(nil), do: "N/A"
   defp format_bytes(bytes) when bytes < 1024, do: "#{bytes} B"
   defp format_bytes(bytes) when bytes < 1024 * 1024, do: "#{Float.round(bytes / 1024, 1)} KB"
   defp format_bytes(bytes), do: "#{Float.round(bytes / 1024 / 1024, 2)} MB"
 
-  defp format_dimensions(nil, nil), do: "N/A"
-  defp format_dimensions(w, h), do: "#{w}x#{h}"
-
-  defp gop_size_percentage(size, max) when max > 0 do
-    Float.round(size / max * 100, 1)
-  end
-
-  defp gop_size_percentage(_, _), do: 0
-
-  defp count_frame_types(gops) do
-    Enum.reduce(gops, %{i_frames: 0, p_frames: 0, b_frames: 0}, fn gop, acc ->
-      %{
-        i_frames: acc.i_frames + (gop.i_frames || 0),
-        p_frames: acc.p_frames + (gop.p_frames || 0),
-        b_frames: acc.b_frames + (gop.b_frames || 0)
-      }
-    end)
-  end
+  defp error_to_string(:too_large), do: "FILE TOO LARGE (max 500MB)"
+  defp error_to_string(:too_many_files), do: "TOO MANY FILES (max 1)"
+  defp error_to_string(:not_accepted), do: "FILE TYPE NOT ACCEPTED"
+  defp error_to_string(err), do: "ERROR: #{inspect(err)}"
 end
